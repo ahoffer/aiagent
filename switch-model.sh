@@ -4,11 +4,11 @@
 #
 # Usage:
 #   ./switch-model.sh                      # pick a model, print confirmation
-#   ./switch-model.sh ./bench-ollama.sh    # pick a model, run benchmark with it
+#   ./switch-model.sh ./tests/bench-ollama.sh  # pick a model, run benchmark with it
 #   source switch-model.sh                 # pick a model, set vars in current shell
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/agent-env.sh"
+source "$SCRIPT_DIR/.env"
 
 # Fetch model list from Ollama
 modelsJson=$(curl -sf --max-time 10 "$OLLAMA_URL/api/tags" 2>/dev/null)

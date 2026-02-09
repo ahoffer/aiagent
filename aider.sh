@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/agent-env.sh"
+source "$SCRIPT_DIR/.env"
 export OLLAMA_API_BASE="${OLLAMA_HOST}"
 
 if ! command -v aider &>/dev/null; then

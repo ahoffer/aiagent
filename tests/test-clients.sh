@@ -5,7 +5,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/test-lib.sh"
-source "$SCRIPT_DIR/agent-env.sh"
+source "$SCRIPT_DIR/../.env"
 
 MODEL="${MODEL:-qwen3:14b-16k}"
 TIMEOUT=120

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/agent-env.sh"
+source "$SCRIPT_DIR/.env"
 export OLLAMA_HOST
 export GOOSE_PROVIDER="${GOOSE_PROVIDER:-ollama}"
 export GOOSE_MODEL="${GOOSE_MODEL:-$AGENT_MODEL}"

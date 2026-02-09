@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/agent-env.sh"
+source "$SCRIPT_DIR/.env"
 
 if ! command -v opencode &>/dev/null; then
     echo "OpenCode not found. Installing..."
