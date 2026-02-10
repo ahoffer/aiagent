@@ -34,6 +34,21 @@ Verify with `./tests/test-stack.sh` (8 checks) and `./tests/test-services.sh` (1
 | `openhands.sh` | 10s | Fully autonomous engineering agent that runs in a sandboxed container. Plans, codes, tests, and iterates without intervention. Web search via SearXNG. |
 | [Open WebUI](http://localhost:31380) | - | Browser chat interface for general questions, conversation, and web research. SearXNG integration searches the web automatically. Supports RAG, document uploads, and image generation. Works like ChatGPT. |
 
+Local models sometimes misinterpret intent. Asking a frontend to "review" code may cause the model to attempt edits instead of analysis, surfacing raw tool errors when the edit fails. Use explicit phrasing like "analyze this code, do not edit any files" to avoid this.
+
+### Context Injected by Each Frontend
+
+What the model knows before you type anything. ollmcp discovers context on demand via MCP servers instead of pre-injecting it.
+
+| Context | Claude Code | Goose | Aider | OpenCode | ollmcp | Open WebUI |
+|---------|:-----------:|:-----:|:-----:|:--------:|:------:|:----------:|
+| Date/time | Yes | Yes | Yes | Yes | Yes | No |
+| Working directory | Yes | Yes | Yes | Yes | No | N/A |
+| OS/platform | Yes | Yes | No | Yes | No | N/A |
+| Git branch/status | Yes | Yes | Yes | Yes | No | N/A |
+| User instructions | CLAUDE.md | .goosehints, CLAUDE.md | conventions | AGENTS.md, CLAUDE.md | No | N/A |
+| Repo structure | No | No | Yes (repo-map) | No | No | N/A |
+
 ## MCP Tool Servers
 
 Five servers in `mcp-servers.json` extend tool-capable frontends.

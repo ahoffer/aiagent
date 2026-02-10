@@ -7,6 +7,7 @@ source "$SCRIPT_DIR/.env"
 export OLLAMA_HOST
 export GOOSE_PROVIDER="${GOOSE_PROVIDER:-ollama}"
 export GOOSE_MODEL="${GOOSE_MODEL:-$AGENT_MODEL}"
+export GOOSE_CLI_THEME="${GOOSE_CLI_THEME:-light}"
 
 if ! command -v goose &>/dev/null; then
     echo "Goose not found. Installing..."

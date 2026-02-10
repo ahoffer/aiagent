@@ -11,6 +11,18 @@ if ! command -v ollmcp &>/dev/null; then
     echo "Installed."
 fi
 
+# ollmcp has no CLI flag for system prompt. Write a default config with
+# the current date and time so the model knows when it is.
+OLLMCP_CONFIG_DIR="${HOME}/.config/ollmcp"
+mkdir -p "$OLLMCP_CONFIG_DIR"
+cat > "$OLLMCP_CONFIG_DIR/default.json" <<EOJSON
+{
+  "modelConfig": {
+    "system_prompt": "${AGENT_SYSTEM_PROMPT} The current date and time is $(date -Iseconds)."
+  }
+}
+EOJSON
+
 exec ollmcp \
     -H "$OLLAMA_HOST" \
     -m "$AGENT_MODEL" \
