@@ -3,7 +3,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/.env"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$PROJECT_DIR/.env"
 
 if ! command -v ollmcp &>/dev/null; then
     echo "Installing mcp-client-for-ollama..."
@@ -26,5 +27,5 @@ EOJSON
 exec ollmcp \
     -H "$OLLAMA_HOST" \
     -m "$OLLMCP_MODEL" \
-    -j "$SCRIPT_DIR/mcp-servers.json" \
+    -j "$PROJECT_DIR/mcp-servers.json" \
     "$@"

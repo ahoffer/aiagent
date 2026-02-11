@@ -1,0 +1,100 @@
+# ---------- SearXNG ----------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: searxng-settings
+  namespace: ai-agent
+data:
+  settings.yml: |
+    use_default_settings: true
+    server:
+      secret_key: "REPLACE_SECRET_KEY"
+      limiter: false
+    search:
+      formats:
+        - html
+        - json
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: searxng
+  namespace: ai-agent
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: searxng
+  template:
+    metadata:
+      labels:
+        app: searxng
+    spec:
+      initContainers:
+        - name: inject-secret
+          image: busybox:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              cp /etc/searxng-template/settings.yml /etc/searxng/settings.yml
+              sed -i "s|REPLACE_SECRET_KEY|$SEARXNG_SECRET_KEY|" /etc/searxng/settings.yml
+          env:
+            - name: SEARXNG_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: searxng-secret
+                  key: SEARXNG_SECRET_KEY
+          volumeMounts:
+            - name: settings-template
+              mountPath: /etc/searxng-template
+            - name: settings-live
+              mountPath: /etc/searxng
+      containers:
+        - name: searxng
+          image: searxng/searxng:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: SEARXNG_BIND_ADDRESS
+              value: "0.0.0.0:8080"
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: settings-live
+              mountPath: /etc/searxng
+          readinessProbe:
+            httpGet: { path: /, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /, port: 8080 }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            failureThreshold: 3
+      volumes:
+        - name: settings-template
+          configMap:
+            name: searxng-settings
+        - name: settings-live
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: searxng
+  namespace: ai-agent
+spec:
+  selector:
+    app: searxng
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 31080
+  type: NodePort

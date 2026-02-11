@@ -1,0 +1,151 @@
+# ---------- Ollama (GPU) ----------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-data
+  namespace: ai-agent
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 200Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ollama-config
+  namespace: ai-agent
+data:
+  OLLAMA_HOST: "0.0.0.0:11434"
+  OLLAMA_KEEP_ALIVE: "5m"
+  OLLAMA_NUM_PARALLEL: "2"
+  OLLAMA_MAX_LOADED_MODELS: "1"
+  DEFAULT_MODEL: "qwen3:14b"
+  # LLM response tuning. Applied by creating a model alias at startup.
+  AGENT_TEMPERATURE: "0.7"
+  AGENT_MAX_TOKENS: "2048"
+  AGENT_TOP_P: "0.9"
+  AGENT_REPEAT_PENALTY: "1.2"
+  AGENT_SYSTEM_PROMPT: "Be concise and direct. Avoid filler phrases. When helping with code, ALWAYS search the web for latest documentation, API references, and code examples before answering. Do not rely on potentially outdated training data. Search first, then answer."
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: ai-agent
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      initContainers:
+        - name: model-puller
+          image: ollama/ollama:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              ollama serve &
+              sleep 5
+              until ollama list >/dev/null 2>&1; do sleep 2; done
+              # Pull base model for agent orchestration and synthesis
+              timeout 600 ollama pull "$DEFAULT_MODEL" || echo "Model pull failed or timed out"
+              # Pull fast model for interpreter, research, and critic nodes
+              timeout 300 ollama pull qwen2.5:7b || echo "Fast model pull failed or timed out"
+              # Pull embedding model for RAG
+              timeout 120 ollama pull nomic-embed-text || echo "Embedding model pull failed or timed out"
+          env:
+            - name: DEFAULT_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: ollama-config
+                  key: DEFAULT_MODEL
+          resources:
+            requests:
+              memory: 1Gi
+              cpu: 500m
+            limits:
+              memory: 2Gi
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          ports:
+            - containerPort: 11434
+          envFrom:
+            - configMapRef:
+                name: ollama-config
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    sleep 10
+                    # Create tuned model alias with verbosity controls from ConfigMap
+                    cat > /tmp/Modelfile <<EOF
+                    FROM $DEFAULT_MODEL
+                    PARAMETER temperature $AGENT_TEMPERATURE
+                    PARAMETER num_predict $AGENT_MAX_TOKENS
+                    PARAMETER top_p $AGENT_TOP_P
+                    PARAMETER repeat_penalty $AGENT_REPEAT_PENALTY
+                    SYSTEM $AGENT_SYSTEM_PROMPT
+                    EOF
+                    ollama create "${DEFAULT_MODEL}-agent" -f /tmp/Modelfile > /dev/null 2>&1 || true
+                    # Warmup the tuned alias
+                    curl -s --max-time 120 http://localhost:11434/api/generate \
+                      -d "{\"model\": \"${DEFAULT_MODEL}-agent\", \"prompt\": \"hi\", \"stream\": false, \"options\": {\"num_predict\": 1}}" \
+                      > /dev/null 2>&1 || true
+          resources:
+            requests:
+              memory: 2Gi
+              cpu: 1000m
+            limits:
+              memory: 12Gi
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 11434
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 11434
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+      volumes:
+        - name: ollama-data
+          persistentVolumeClaim:
+            claimName: ollama-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+  namespace: ai-agent
+spec:
+  selector:
+    app: ollama
+  ports:
+    - name: http
+      port: 11434
+      targetPort: 11434
+      nodePort: 31434
+  type: NodePort
