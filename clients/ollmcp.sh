@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-source "$PROJECT_DIR/.env"
+source "$PROJECT_DIR/defaults.sh"
 
 if ! command -v ollmcp &>/dev/null; then
     echo "Installing mcp-client-for-ollama..."

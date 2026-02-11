@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/../.env"
+source "$SCRIPT_DIR/../defaults.sh"
 
 export LLM_API_KEY="${LLM_API_KEY:-ollama}"
 export LLM_BASE_URL="${OLLAMA_HOST}"

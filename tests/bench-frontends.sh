@@ -10,7 +10,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/../.env"
+source "$SCRIPT_DIR/../defaults.sh"
 
 MODEL="${MODEL:-$AGENT_MODEL}"
 TIMEOUT="${TIMEOUT:-120}"

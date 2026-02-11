@@ -67,7 +67,7 @@ Five servers in `mcp-servers.json` extend tool-capable frontends.
 
 ## Configuration
 
-All launcher scripts source `.env` for defaults. Override any variable at launch.
+All launcher scripts source `defaults.sh` for defaults. Override any variable at launch.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

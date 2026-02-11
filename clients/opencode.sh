@@ -6,9 +6,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/../.env"
+source "$SCRIPT_DIR/../defaults.sh"
 
-# OPENCODE_MODEL from .env, defaults to 16k context variant
+# OPENCODE_MODEL from defaults.sh, defaults to 16k context variant
 OPENCODE_PORT="${OPENCODE_PORT:-31580}"
 
 if ! command -v opencode &>/dev/null; then
