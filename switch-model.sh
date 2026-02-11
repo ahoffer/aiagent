@@ -1,18 +1,46 @@
 #!/usr/bin/env bash
 # Interactive model switcher for the agent stack.
-# Sets AGENT_MODEL and MODEL so launchers and bench scripts use the chosen model.
+# Sets model variables so launchers use the chosen model.
 #
 # Usage:
-#   ./switch-model.sh                      # pick a model, print confirmation
-#   ./switch-model.sh ./tests/bench-ollama.sh  # pick a model, run benchmark with it
+#   ./switch-model.sh                      # pick a model for all frontends
+#   ./switch-model.sh aider                # pick a model for aider only
+#   ./switch-model.sh goose openhands      # pick a model for goose and openhands
+# Note: ollmcp has internal model switching, use /models command in the chat
 #   source switch-model.sh                 # pick a model, set vars in current shell
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/.env"
 
+# Parse frontend arguments
+FRONTENDS=()
+PASSTHROUGH_CMD=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        aider|goose|opencode|openhands|all)
+            FRONTENDS+=("$1")
+            shift
+            ;;
+        --)
+            shift
+            PASSTHROUGH_CMD=("$@")
+            break
+            ;;
+        *)
+            PASSTHROUGH_CMD=("$@")
+            break
+            ;;
+    esac
+done
+
+# Default to all frontends if none specified
+if [[ ${#FRONTENDS[@]} -eq 0 ]]; then
+    FRONTENDS=("all")
+fi
+
 # Fetch model list from Ollama
 modelsJson=$(curl -sf --max-time 10 "$OLLAMA_URL/api/tags" 2>/dev/null)
-if [ $? -ne 0 ] || [ -z "$modelsJson" ]; then
+if [[ $? -ne 0 ]] || [[ -z "$modelsJson" ]]; then
     echo "ERROR: cannot reach Ollama at $OLLAMA_URL"
     return 1 2>/dev/null || exit 1
 fi
@@ -36,7 +64,7 @@ for m in sorted(tags.get('models', []), key=lambda x: x['name']):
         print(f'{sizeBytes / 1_000_000:.0f} MB')
 " <<< "$modelsJson")
 
-if [ ${#modelNames[@]} -eq 0 ]; then
+if [[ ${#modelNames[@]} -eq 0 ]]; then
     echo "No models found in Ollama."
     return 1 2>/dev/null || exit 1
 fi
@@ -55,6 +83,14 @@ for i in "${!modelNames[@]}"; do
 done
 echo ""
 
+# Show which frontends will be configured
+if [[ " ${FRONTENDS[*]} " == *" all "* ]]; then
+    echo "Configuring: all frontends"
+else
+    echo "Configuring: ${FRONTENDS[*]}"
+fi
+echo ""
+
 # Read selection
 count=${#modelNames[@]}
 while true; do
@@ -66,23 +102,49 @@ while true; do
 done
 
 chosen="${modelNames[$((selection - 1))]}"
-export AGENT_MODEL="$chosen"
-export MODEL="$chosen"
 
-echo ""
-echo "Selected: $chosen"
-
-# If arguments were passed, exec the command with the model set
-if [ $# -gt 0 ]; then
-    echo "Running: $*"
+# Set the appropriate variables based on frontend selection
+if [[ " ${FRONTENDS[*]} " == *" all "* ]]; then
+    export AGENT_MODEL="$chosen"
+    export AIDER_MODEL="$chosen"
+    export GOOSE_MODEL="$chosen"
+    export OPENCODE_MODEL="$chosen"
+    export OPENHANDS_MODEL="$chosen"
+    export MODEL="$chosen"
     echo ""
-    exec "$@"
+    echo "Selected: $chosen (all frontends)"
+else
+    for frontend in "${FRONTENDS[@]}"; do
+        case "$frontend" in
+            aider)
+                export AIDER_MODEL="$chosen"
+                ;;
+            goose)
+                export GOOSE_MODEL="$chosen"
+                ;;
+            opencode)
+                export OPENCODE_MODEL="$chosen"
+                ;;
+            openhands)
+                export OPENHANDS_MODEL="$chosen"
+                ;;
+        esac
+    done
+    echo ""
+    echo "Selected: $chosen (${FRONTENDS[*]})"
+fi
+
+# If passthrough command was given, exec it
+if [[ ${#PASSTHROUGH_CMD[@]} -gt 0 ]]; then
+    echo "Running: ${PASSTHROUGH_CMD[*]}"
+    echo ""
+    exec "${PASSTHROUGH_CMD[@]}"
 fi
 
 # When sourced, vars are already in the caller's environment.
 # When executed directly, remind the user.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     echo ""
-    echo "AGENT_MODEL and MODEL are set in this subshell only."
+    echo "Variables are set in this subshell only."
     echo "To set them in your current shell, run: source switch-model.sh"
 fi

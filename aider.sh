@@ -12,4 +12,5 @@ if ! command -v aider &>/dev/null; then
     echo "Installed."
 fi
 
-exec aider --model "ollama/$AGENT_MODEL" "$@"
+# Use AIDER_MODEL. Defaults to base model since -agent thinking tokens break litellm's parser.
+exec aider --model "ollama/$AIDER_MODEL" "$@"

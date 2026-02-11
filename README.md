@@ -4,14 +4,14 @@ Self-hosted AI development platform on Kubernetes with GPU-accelerated LLM infer
 
 ## Architecture
 
-Four services run in the `ai-agent` namespace. Ollama serves models with NVIDIA GPU passthrough. SearXNG aggregates web search results. Qdrant stores vector embeddings for RAG. Open WebUI provides a browser chat interface connecting all three.
+Four services run in the `ai-agent` namespace.
 
 | Service | Role | Cluster DNS | NodePort |
 |---------|------|-------------|----------|
-| Ollama | LLM inference (GPU) | ollama:11434 | :31434 |
-| SearXNG | Web search aggregation | searxng:8080 | :31080 |
-| Qdrant | Vector embeddings for RAG | qdrant:6333 | :31333 |
-| Open WebUI | Browser chat interface | open-webui:8080 | :31380 |
+| Ollama | Serves models with NVIDIA GPU passthrough | ollama:11434 | :31434 |
+| SearXNG | Aggregates web search results | searxng:8080 | :31080 |
+| Qdrant | Stores vector embeddings for RAG | qdrant:6333 | :31333 |
+| Open WebUI | Browser chat interface connecting all three | open-webui:8080 | :31380 |
 
 ## Quick Start
 
@@ -25,29 +25,16 @@ Verify with `./tests/test-stack.sh` (8 checks) and `./tests/test-services.sh` (1
 
 ## Agent Frontends
 
-| Frontend | Latency | Description |
-|----------|---------|-------------|
-| `aider.sh` | 13s | Pair programming agent that proposes diffs for human review. Edits code in your working directory. No web search or tool use. |
-| `goose.sh` | 17s | Autonomous multi-step agent that chains tasks together. Web search and MCP tools available via config. Good for longer autonomous sequences. |
-| `ollmcp.sh` | 4s | Terminal chat with live tool calling across all 5 MCP servers. Web search via SearXNG, file access, git, shell commands. Best for exploring what the model can do with tools. |
-| `opencode.sh` | 1s | Lightweight TUI for quick code questions and small edits with human review. No web search or tool use. Fastest startup of any frontend. |
-| `openhands.sh` | 10s | Fully autonomous engineering agent that runs in a sandboxed container. Plans, codes, tests, and iterates without intervention. Web search via SearXNG. |
-| [Open WebUI](http://localhost:31380) | - | Browser chat interface for general questions, conversation, and web research. SearXNG integration searches the web automatically. Supports RAG, document uploads, and image generation. Works like ChatGPT. |
+| Frontend | Startup | Autonomy | Integrations | Description |
+|----------|---------|----------|--------------|-------------|
+| `aider.sh` | 13s | You approve each edit | File edit | Pair programming agent that proposes diffs. Edits code in your working directory. |
+| `goose.sh` | 17s | Self-directed | None | Multi-step agent that chains tasks together. Reads .goosehints for project context. |
+| `ollmcp.sh` | 4s | You drive the conversation | Web search, files, git, shell | Terminal chat with live tool calling across 5 MCP servers. |
+| `opencode.sh` | 1s | You approve each edit | None | Lightweight web UI for quick code questions. Browser only, runs on port 31580. |
+| `openhands.sh` | 10s | Runs unattended | Web search, file edit, shell | Sandboxed agent that plans, codes, tests, and iterates without intervention. |
+| [Open WebUI](http://localhost:31380) | - | You drive the conversation | Web search, RAG, image gen | Browser chat for general questions and web research. Works like ChatGPT. |
 
 Local models sometimes misinterpret intent. Asking a frontend to "review" code may cause the model to attempt edits instead of analysis, surfacing raw tool errors when the edit fails. Use explicit phrasing like "analyze this code, do not edit any files" to avoid this.
-
-### Context Injected by Each Frontend
-
-What the model knows before you type anything. ollmcp discovers context on demand via MCP servers instead of pre-injecting it.
-
-| Context | Claude Code | Goose | Aider | OpenCode | ollmcp | Open WebUI |
-|---------|:-----------:|:-----:|:-----:|:--------:|:------:|:----------:|
-| Date/time | Yes | Yes | Yes | Yes | Yes | No |
-| Working directory | Yes | Yes | Yes | Yes | No | N/A |
-| OS/platform | Yes | Yes | No | Yes | No | N/A |
-| Git branch/status | Yes | Yes | Yes | Yes | No | N/A |
-| User instructions | CLAUDE.md | .goosehints, CLAUDE.md | conventions | AGENTS.md, CLAUDE.md | No | N/A |
-| Repo structure | No | No | Yes (repo-map) | No | No | N/A |
 
 ## MCP Tool Servers
 
@@ -63,65 +50,24 @@ Five servers in `mcp-servers.json` extend tool-capable frontends.
 
 ## Configuration
 
-### ConfigMap Reference
-
-All Kubernetes configuration lives in two ConfigMaps applied via `agent.yaml`.
-
-#### ollama-config
+All launcher scripts source `.env` for defaults. Override any variable at launch.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| OLLAMA_HOST | 0.0.0.0:11434 | Server bind address |
-| OLLAMA_KEEP_ALIVE | 5m | How long to keep models in memory before unloading |
-| OLLAMA_NUM_PARALLEL | 2 | Parallel inference requests |
-| OLLAMA_MAX_LOADED_MODELS | 1 | Maximum models loaded simultaneously |
-| DEFAULT_MODEL | qwen3:14b | Base model pulled from Ollama registry at startup |
-| AGENT_TEMPERATURE | 0.7 | Sampling temperature, lower is more focused |
-| AGENT_MAX_TOKENS | 2048 | Maximum output tokens per generation |
-| AGENT_TOP_P | 0.9 | Nucleus sampling threshold |
-| AGENT_REPEAT_PENALTY | 1.2 | Penalty discouraging token repetition |
-| AGENT_SYSTEM_PROMPT | Be concise and direct... | System prompt baked into the tuned model alias |
-
-#### open-webui-config
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| OLLAMA_BASE_URLS | http://ollama:11434 | Ollama API endpoint via cluster DNS |
-| ENABLE_RAG_WEB_SEARCH | true | Enable RAG with web search |
-| RAG_WEB_SEARCH_ENGINE | searxng | Search backend for RAG |
-| SEARXNG_QUERY_URL | http://searxng:8080/search?q=\<query\>&format=json | SearXNG query endpoint |
-| WEBUI_AUTH | false | Disable authentication |
-| VECTOR_DB | qdrant | Vector database backend for embeddings |
-| QDRANT_URI | http://qdrant:6333 | Qdrant REST endpoint via cluster DNS |
-| RAG_EMBEDDING_ENGINE | ollama | Use Ollama for embedding generation |
-| RAG_EMBEDDING_MODEL | nomic-embed-text | Embedding model name |
-| DEFAULT_MODELS | qwen3:14b-agent | Model preselected in the chat dropdown |
-
-#### .env
-
-Client-side defaults sourced by all launcher scripts.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| OLLAMA_HOST | http://localhost:31434 | Client-side NodePort URL for reaching Ollama |
-| OLLAMA_URL | $OLLAMA_HOST | Alias for tools that prefer OLLAMA_URL over OLLAMA_HOST |
-| AGENT_BASE_MODEL | qwen3:14b | Base model pulled from Ollama registry |
-| AGENT_MODEL | ${AGENT_BASE_MODEL}-agent | Tuned alias with baked-in verbosity controls |
-| AGENT_TEMPERATURE | 0.7 | Sampling temperature, lower is more focused |
-| AGENT_MAX_TOKENS | 2048 | Maximum output tokens per generation |
-| AGENT_TOP_P | 0.9 | Nucleus sampling threshold |
-| AGENT_REPEAT_PENALTY | 1.2 | Penalty discouraging token repetition |
-| AGENT_SYSTEM_PROMPT | Be concise and direct... | System prompt baked into the tuned model alias |
-
-### Environment Variable Override
-
-Override any variable before launching a script to use different settings without restarting the cluster.
+| AGENT_MODEL | qwen3:14b-agent | Default model, tuned alias with concise output |
+| AIDER_MODEL | llama3.1:8b | Model for aider, llama works where qwen3 causes litellm parse errors |
+| GOOSE_MODEL | qwen3:14b-agent | Model for goose |
+| OLLMCP_MODEL | mistral-nemo:latest | Initial model for ollmcp, mistral is better at tool calling |
+| OPENCODE_MODEL | qwen3:14b-16k | Model for opencode, uses 16k context variant |
+| OPENHANDS_MODEL | mistral-nemo:latest | Model for openhands, mistral is more reliable at tool calling |
 
 ```bash
-AGENT_MODEL=qwen3:14b ./goose.sh          # bypass the tuned alias
-AGENT_TEMPERATURE=0.3 ./ollmcp.sh          # lower temperature for this session
-AGENT_MODEL=qwen3:8b ./aider.sh            # use the smaller model
+GOOSE_MODEL=qwen3:8b ./goose.sh           # use smaller model for goose
+AIDER_MODEL=llama3.1:8b ./aider.sh        # try llama for aider
+./switch-model.sh                          # interactive model picker
 ```
+
+Cluster-side settings live in ConfigMaps in `agent.yaml`.
 
 ## Testing
 

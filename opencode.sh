@@ -8,7 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/.env"
 
-AGENT_MODEL="qwen3:14b-16k"
+# OPENCODE_MODEL from .env, defaults to 16k context variant
 OPENCODE_PORT="${OPENCODE_PORT:-31580}"
 
 if ! command -v opencode &>/dev/null; then
@@ -18,6 +18,29 @@ if ! command -v opencode &>/dev/null; then
     chmod +x ~/.local/bin/opencode
     echo "Installed."
 fi
+
+OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+OPENCODE_CONFIG="${OPENCODE_CONFIG_DIR}/opencode.json"
+mkdir -p "$OPENCODE_CONFIG_DIR"
+cat > "$OPENCODE_CONFIG" <<EOF
+{
+  "\$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama",
+      "options": {
+        "baseURL": "${OLLAMA_HOST}/v1"
+      },
+      "models": {
+        "${OPENCODE_MODEL}": {
+          "name": "Qwen3 14B 16K"
+        }
+      }
+    }
+  }
+}
+EOF
 
 if [[ $# -eq 0 ]]; then
     FQDN="$(hostname -f 2>/dev/null || hostname)"
