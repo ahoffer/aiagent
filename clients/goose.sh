@@ -16,6 +16,8 @@ export GOOSE_PROVIDER="${GOOSE_PROVIDER:-proteus}"
 export GOOSE_MODEL="${GOOSE_MODEL:-proteus}"
 export PROTEUS_API_KEY="not-needed"
 export GOOSE_CLI_THEME="${GOOSE_CLI_THEME:-light}"
+# Show full tool parameters without truncation. Logs land in ~/.local/state/goose/logs/
+export GOOSE_DEBUG="${GOOSE_DEBUG:-1}"
 
 if ! command -v goose &>/dev/null; then
     echo "Goose not found. Installing..."

@@ -33,12 +33,26 @@ kubectl apply -f k8s/qdrant.yaml
 kubectl apply -f k8s/ollama.yaml
 kubectl apply -f k8s/proteus.yaml
 
+# Force Proteus to pick up the new image. kubectl apply is a no-op when only
+# the image tag changes and the pod spec hash stays the same.
+echo "Forcing Proteus rollout for image proteus:${SHORT_SHA}..."
+kubectl -n "$NS" rollout restart deploy/proteus
+
 # Wait for all deployments
 echo "Waiting for deployments..."
 kubectl -n "$NS" rollout status deploy/ollama
 kubectl -n "$NS" rollout status deploy/searxng
 kubectl -n "$NS" rollout status deploy/qdrant
 kubectl -n "$NS" rollout status deploy/proteus
+
+# Verify the new image is actually running
+RUNNING_IMAGE=$(kubectl -n "$NS" get pods -l app=proteus \
+    -o jsonpath='{.items[0].spec.containers[0].image}' 2>/dev/null || true)
+if [[ "$RUNNING_IMAGE" != "proteus:${SHORT_SHA}" ]]; then
+    echo "Error: Proteus pod is running $RUNNING_IMAGE, expected proteus:${SHORT_SHA}"
+    exit 1
+fi
+echo "Verified Proteus is running proteus:${SHORT_SHA}"
 
 # Warm up model on GPU so first request is fast. Do this explicitly in the
 # installer and verify each step rather than relying on background hooks.

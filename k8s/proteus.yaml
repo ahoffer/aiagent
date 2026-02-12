@@ -30,6 +30,11 @@ spec:
       labels:
         app: proteus
     spec:
+      # Feb 2026: containerd on bigfish fails with "open /sys/kernel/security/apparmor/profiles"
+      # when AppArmor kernel module is not loaded. Disable the default profile.
+      securityContext:
+        appArmorProfile:
+          type: Unconfined
       containers:
         - name: proteus
           image: proteus:8ca5820cbd28

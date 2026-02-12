@@ -88,4 +88,5 @@ if command -v curl &>/dev/null; then
     fi
 fi
 
-exec opencode -m "proteus/proteus" "$@"
+# -d enables debug logging. Logs land in ~/.local/share/opencode/logs/
+exec opencode -d -m "proteus/proteus" "$@"
