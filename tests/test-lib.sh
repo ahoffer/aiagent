@@ -5,7 +5,8 @@
 
 set -euo pipefail
 
-OLLAMA_URL="${OLLAMA_URL:-http://localhost:31434}"
+# Ollama is cluster-internal. Use kubectl port-forward deploy/ollama 11434:11434 -n aiforge
+OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 SEARXNG_URL="${SEARXNG_URL:-http://localhost:31080}"
 QDRANT_URL="${QDRANT_URL:-http://localhost:31333}"
 OPENWEBUI_URL="${OPENWEBUI_URL:-http://localhost:31380}"

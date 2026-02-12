@@ -2,17 +2,21 @@
 
 Self-hosted AI platform on Kubernetes with GPU-accelerated inference, web search, vector storage, and chat.
 
+## Vision
+- The goal is agentic software development in which engineers supervise and guide AI agents rather than writing most code by hand.
+- This marks a shift in how developers work, with more emphasis on orchestration, oversight, and the art/science of managing intelligent systems.
+
 ## Architecture
 
 Five services in the `aiforge` namespace.
 
 | Service | Role | Cluster DNS | NodePort |
 |---------|------|-------------|----------|
-| Ollama | GPU model serving | ollama:11434 | :31434 |
+| Ollama | GPU model serving | ollama:11434 | cluster-internal |
 | SearXNG | Web search aggregation | searxng:8080 | :31080 |
 | Qdrant | Vector embeddings for RAG | qdrant:6333 | :31333 |
 | Open WebUI | Browser chat interface | open-webui:8080 | :31380 |
-| Agent | LangGraph autonomous agent | agent:8000 | :31400 |
+| Proteus | Smart proxy with server-side web search | proteus:8000 | :31400 |
 
 ## Quick Start
 
@@ -30,28 +34,24 @@ Verify with `./tests/test-stack.sh` and `./tests/test-services.sh`, then open `h
 |----------|-------------|
 | `goose.sh` | Terminal coding agent with MCP tool calling (web search, files, git, shell) |
 | `opencode.sh` | Terminal coding assistant with MCP tool calling and TUI |
-| [Open WebUI](http://localhost:31380) | Browser chat routed through the agent via OpenAI-compatible endpoint |
+| [Open WebUI](http://localhost:31380) | Browser chat routed through Proteus via OpenAI-compatible endpoint |
 
 Local models sometimes misinterpret intent. Use explicit phrasing like "analyze this code, do not edit any files" to avoid unintended edits.
 
-## Agent
+## Proteus
 
-FastAPI app in `images/agent/`, two-node LangGraph workflow:
-
-- **Orchestrator** calls Ollama with native tool calling
-- **Tools** node executes tool calls and loops back (up to 5 iterations)
-- Available tools: `web_search` (SearXNG)
+FastAPI app in `images/proteus/`, smart proxy that forwards requests to Ollama and intercepts `web_search` tool calls server-side via SearXNG. Client-defined tools (filesystem, git, shell) pass through transparently. Also runs a two-node LangGraph workflow for the native `/chat` endpoints.
 
 API endpoints:
 
 - `POST /chat` - native chat with sources
 - `POST /chat/stream` - SSE streaming with node progress
-- `POST /v1/chat/completions` - OpenAI-compatible (streaming and non-streaming)
+- `POST /v1/chat/completions` - OpenAI-compatible proxy (streaming and non-streaming)
 - `GET /v1/models` - model list for client discovery
 - `GET /health` - dependency health check
 - `GET /docs` - interactive OpenAPI docs
 
-Build: `cd images/agent && ./build.sh` then `kubectl apply -f k8s/`
+Build: `cd images/proteus && ./build.sh` then `kubectl apply -f k8s/`
 
 ## Configuration
 
@@ -60,15 +60,9 @@ Launcher scripts source `defaults.sh`. Override any variable at launch.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | AGENT_MODEL | devstral:latest-agent | Tuned alias with concise output |
-| GOOSE_MODEL | devstral:latest | Model for Goose |
-| OPENCODE_MODEL | devstral:latest | Model for OpenCode |
+| AGENT_URL | http://bigfish:31400 | Proteus proxy URL |
 
-```bash
-GOOSE_MODEL=qwen3:8b ./clients/goose.sh  # use smaller model for Goose
-OPENCODE_MODEL=qwen3:8b ./clients/opencode.sh  # use smaller model for OpenCode
-```
-
-Cluster-side settings live in ConfigMaps in `agent.yaml`.
+Cluster-side settings live in ConfigMaps in `proteus.yaml`.
 
 ## Testing
 
@@ -77,14 +71,14 @@ Cluster-side settings live in ConfigMaps in `agent.yaml`.
 - `test-agent.sh` - agent API including chat, streaming, and OpenAI-compatible endpoints
 - `test-tool-calling.py` - 12 prompts across single-tool, no-tool, multi-tool categories
 - `bench-ollama.sh` - generation speed, prompt eval, time to first token, tool call latency
-- `images/agent/tests/` - unit tests (pytest)
+- `images/proteus/tests/` - unit tests (pytest)
 
 ```bash
 ./tests/test-stack.sh
 ./tests/test-services.sh
 ./tests/test-agent.sh
 python3 tests/test-tool-calling.py
-cd images/agent && python3 -m pytest tests/ -v
+cd images/proteus && python3 -m pytest tests/ -v
 ```
 
 Override target model or URL: `MODEL=qwen3:8b ./tests/test-stack.sh`

@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # Shared environment for agent launcher scripts.
-# OLLAMA_HOST is the client-side NodePort URL used by host tools to reach Ollama.
-# It does not match the ConfigMap bind address (0.0.0.0:11434) which is server-side.
-# Use localhost:31434 when running on the cluster node, bigfish:31434 from other machines.
+# Ollama is cluster-internal only (ClusterIP). For local testing on the cluster
+# node, use kubectl port-forward deploy/ollama 11434:11434 -n aiforge.
 # Override any variable before sourcing or via environment.
 
-OLLAMA_HOST="${OLLAMA_HOST:-http://bigfish:31434}"
+OLLAMA_HOST="${OLLAMA_HOST:-http://localhost:11434}"
 OLLAMA_URL="${OLLAMA_URL:-$OLLAMA_HOST}"
 
 # Base model pulled from Ollama registry
@@ -13,10 +12,6 @@ AGENT_BASE_MODEL="${AGENT_BASE_MODEL:-devstral:latest}"
 
 # Default tuned alias created by the Ollama postStart hook with baked-in verbosity controls.
 AGENT_MODEL="${AGENT_MODEL:-${AGENT_BASE_MODEL}-agent}"
-
-# Per-frontend model overrides. Set any of these to use a different model for that frontend.
-GOOSE_MODEL="${GOOSE_MODEL:-${AGENT_BASE_MODEL}}"
-OPENCODE_MODEL="${OPENCODE_MODEL:-${AGENT_BASE_MODEL}}"
 
 # Response tuning parameters. Same defaults as the ConfigMap.
 AGENT_TEMPERATURE="${AGENT_TEMPERATURE:-0.7}"
@@ -36,3 +31,4 @@ CRITIC_MODEL="${CRITIC_MODEL:-${AGENT_MODEL}}"
 QDRANT_URL="${QDRANT_URL:-http://bigfish:31333}"
 EMBEDDING_MODEL="${EMBEDDING_MODEL:-nomic-embed-text}"
 SEARXNG_URL="${SEARXNG_URL:-http://bigfish:31080}"
+AGENT_URL="${AGENT_URL:-http://bigfish:31400}"

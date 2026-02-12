@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
-# Bootstraps the aiforge namespace with Ollama, SearXNG, Qdrant, and Open WebUI.
-# Creates the SearXNG secret if needed, applies agent.yaml, and waits for rollout.
+# Bootstraps the aiforge namespace with Ollama, SearXNG, Qdrant, Open WebUI, and Proteus.
+# Creates the SearXNG secret if needed, applies all k8s manifests, and waits for rollout.
 set -euo pipefail
 
 NS=aiforge
+
+# Build local container images
+echo "Building Proteus image..."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+"$SCRIPT_DIR/images/proteus/build.sh"
 
 # Create namespace if it doesn't exist
 kubectl get ns "$NS" >/dev/null 2>&1 || kubectl create ns "$NS"
@@ -20,7 +25,7 @@ else
 fi
 
 # Apply the manifest
-kubectl apply -f agent.yaml
+kubectl apply -f k8s/
 
 # Wait for all deployments
 echo "Waiting for deployments..."
@@ -28,13 +33,15 @@ kubectl -n "$NS" rollout status deploy/ollama
 kubectl -n "$NS" rollout status deploy/searxng
 kubectl -n "$NS" rollout status deploy/qdrant
 kubectl -n "$NS" rollout status deploy/open-webui
+kubectl -n "$NS" rollout status deploy/proteus
 
 echo
 echo "Done."
 echo
 echo "Services available at:"
-echo "  Ollama:     http://localhost:31434"
 echo "  SearXNG:    http://localhost:31080"
 echo "  Qdrant:     http://localhost:31333"
 echo "  Open WebUI: http://localhost:31380"
+echo "  Proteus:    http://localhost:31400"
+echo "  Ollama:     cluster-internal (port-forward: kubectl port-forward deploy/ollama 11434:11434 -n aiforge)"
 echo

@@ -9,7 +9,8 @@ printed in a table with per-test latency.
 Usage:
     python3 test-tool-calling.py [model_name] [--url URL]
 
-Defaults to devstral:latest on http://localhost:31434.
+Defaults to devstral:latest on http://localhost:11434.
+Ollama is cluster-internal. Use kubectl port-forward deploy/ollama 11434:11434 -n aiforge.
 """
 
 import argparse
@@ -459,8 +460,8 @@ def main():
     )
     parser.add_argument(
         "--url",
-        default="http://localhost:31434",
-        help="Ollama base URL, default http://localhost:31434",
+        default="http://localhost:11434",
+        help="Ollama base URL, default http://localhost:11434",
     )
     parser.add_argument(
         "--category",
