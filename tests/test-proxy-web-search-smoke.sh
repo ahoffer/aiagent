@@ -51,7 +51,7 @@ echo "--- Verify Proteus Server-Side web_search ---"
 log_lines=$(kubectl logs -n "$NS" deploy/proteus --since-time="$START_TIME" 2>/dev/null || true)
 
 has_completion=$(echo "$log_lines" | grep -c 'POST /v1/chat/completions' 2>/dev/null || true)
-has_proxy_search=$(echo "$log_lines" | grep -c 'Proxy web_search:' 2>/dev/null || true)
+has_proxy_search=$(echo "$log_lines" | grep -c 'Executing web_search:' 2>/dev/null || true)
 
 if [ "$has_completion" -gt 0 ]; then
     report "Proteus received /v1/chat/completions request" "true"
