@@ -7,14 +7,16 @@ avoided tools when appropriate, or chained multiple tools. Results are
 printed in a table with per-test latency.
 
 Usage:
-    python3 test-tool-calling.py [model_name] [--url URL]
+    python3 test-tool-calling.py [model_name] [--url URL] [--direct]
 
-Defaults to devstral:latest on http://localhost:11434.
-Ollama is cluster-internal. Use kubectl port-forward deploy/ollama 11434:11434 -n aiforge.
+Defaults to model "proteus" through Proteus proxy at AGENT_URL env var
+(fallback http://bigfish:31400). Use --direct to bypass the proxy and hit
+Ollama at http://localhost:11434 with devstral:latest instead.
 """
 
 import argparse
 import json
+import os
 import sys
 import time
 import requests
@@ -310,7 +312,170 @@ MULTI_TOOL_TESTS = [
     },
 ]
 
-ALL_TESTS = SINGLE_TOOL_TESTS + NO_TOOL_TESTS + MULTI_TOOL_TESTS
+# -- Multi-turn test support --
+# Simulates a real client-side tool calling loop: send prompt, receive
+# tool_calls, fabricate tool results, send them back, check final answer.
+
+def runMultiTurnTest(baseUrl, modelName, testCase):
+    """Execute a multi-turn tool calling loop and validate the final answer.
+
+    Turn 1: send the user prompt with tools, expect tool_calls back.
+    Turn 2: send fabricated tool results, expect a coherent text answer.
+    """
+    messages = [{"role": "user", "content": testCase["prompt"]}]
+
+    # Turn 1: get tool calls
+    payload = {
+        "model": modelName,
+        "messages": messages,
+        "tools": testCase["tools"],
+        "stream": False,
+    }
+
+    startTime = time.perf_counter()
+    try:
+        httpResponse = requests.post(
+            f"{baseUrl}/v1/chat/completions",
+            json=payload,
+            timeout=120,
+        )
+        httpResponse.raise_for_status()
+        turn1 = httpResponse.json()
+    except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
+        elapsedMs = (time.perf_counter() - startTime) * 1000
+        return {
+            "name": testCase["name"],
+            "category": testCase["category"],
+            "passed": False,
+            "reason": f"turn 1 failed: {exc}",
+            "latencyMs": elapsedMs,
+        }
+
+    calls = extractToolCalls(turn1)
+    if not calls:
+        elapsedMs = (time.perf_counter() - startTime) * 1000
+        content = extractContent(turn1)
+        snippet = content[:80] + "..." if len(content) > 80 else content
+        return {
+            "name": testCase["name"],
+            "category": testCase["category"],
+            "passed": False,
+            "reason": f"turn 1: expected tool_calls, got text: {snippet}",
+            "latencyMs": elapsedMs,
+        }
+
+    # Build turn 2 messages: assistant message with tool_calls, then tool results
+    assistantMsg = turn1["choices"][0]["message"]
+    messages.append(assistantMsg)
+
+    for call in calls:
+        toolName = call.get("function", {}).get("name", "")
+        callId = call.get("id", "call_unknown")
+        fakeResult = testCase["fake_results"].get(toolName, f"{toolName} returned ok")
+        messages.append({
+            "role": "tool",
+            "tool_call_id": callId,
+            "content": fakeResult,
+        })
+
+    # Turn 2: send tool results, expect final text answer
+    payload2 = {
+        "model": modelName,
+        "messages": messages,
+        "tools": testCase["tools"],
+        "stream": False,
+    }
+
+    try:
+        httpResponse2 = requests.post(
+            f"{baseUrl}/v1/chat/completions",
+            json=payload2,
+            timeout=120,
+        )
+        httpResponse2.raise_for_status()
+        turn2 = httpResponse2.json()
+    except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
+        elapsedMs = (time.perf_counter() - startTime) * 1000
+        return {
+            "name": testCase["name"],
+            "category": testCase["category"],
+            "passed": False,
+            "reason": f"turn 2 failed: {exc}",
+            "latencyMs": elapsedMs,
+        }
+
+    elapsedMs = (time.perf_counter() - startTime) * 1000
+    passed, reason = testCase["validate_final"](turn2, calls)
+
+    return {
+        "name": testCase["name"],
+        "category": testCase["category"],
+        "passed": passed,
+        "reason": reason,
+        "latencyMs": elapsedMs,
+    }
+
+
+def validateFinalHasContent(response, turn1Calls):
+    """Check that the model produced a non-empty text answer after tool results."""
+    content = extractContent(response)
+    if not content.strip():
+        turn2Calls = extractToolCalls(response)
+        if turn2Calls:
+            names = [c.get("function", {}).get("name", "?") for c in turn2Calls]
+            return False, f"model called more tools instead of answering: {names}"
+        return False, "empty final answer"
+    return True, f"final answer ({len(content)} chars)"
+
+
+def validateFinalContains(substrings):
+    """Check that the final answer contains all expected substrings."""
+    def validator(response, turn1Calls):
+        content = extractContent(response)
+        if not content.strip():
+            return False, "empty final answer"
+        lowered = content.lower()
+        missing = [s for s in substrings if s.lower() not in lowered]
+        if missing:
+            return False, f"answer missing expected terms: {missing}"
+        return True, f"final answer contains expected terms ({len(content)} chars)"
+    return validator
+
+
+MULTI_TURN_TESTS = [
+    {
+        "name": "read file then summarize",
+        "category": "multi_turn",
+        "prompt": "Read /etc/hostname and tell me what the hostname is",
+        "tools": ALL_TOOLS,
+        "fake_results": {
+            "read_file": "proteus-node-7a3b\n",
+        },
+        "validate_final": validateFinalContains(["proteus-node-7a3b"]),
+    },
+    {
+        "name": "list then describe",
+        "category": "multi_turn",
+        "prompt": "List the files in /var/log and tell me how many there are",
+        "tools": ALL_TOOLS,
+        "fake_results": {
+            "list_files": "syslog\nauth.log\nkern.log\ndpkg.log\nboot.log",
+        },
+        "validate_final": validateFinalContains(["5"]),
+    },
+    {
+        "name": "web search then answer",
+        "category": "multi_turn",
+        "prompt": "Search the web for the capital of Iceland and tell me what it is",
+        "tools": ALL_TOOLS,
+        "fake_results": {
+            "web_search": "Reykjavik is the capital and largest city of Iceland.",
+        },
+        "validate_final": validateFinalContains(["Reykjavik"]),
+    },
+]
+
+ALL_TESTS = SINGLE_TOOL_TESTS + NO_TOOL_TESTS + MULTI_TOOL_TESTS + MULTI_TURN_TESTS
 
 
 def runTest(baseUrl, modelName, testCase):
@@ -455,40 +620,61 @@ def main():
     parser.add_argument(
         "model",
         nargs="?",
-        default="devstral:latest",
-        help="Model name to test, default devstral:latest",
+        default=None,
+        help="Model name to test. Default: proteus (proxy) or devstral:latest (--direct)",
     )
     parser.add_argument(
         "--url",
-        default="http://localhost:11434",
-        help="Ollama base URL, default http://localhost:11434",
+        default=None,
+        help="Base URL. Default: AGENT_URL env or http://bigfish:31400 (proxy), "
+             "http://localhost:11434 (--direct)",
+    )
+    parser.add_argument(
+        "--direct",
+        action="store_true",
+        help="Bypass Proteus and test against Ollama directly",
     )
     parser.add_argument(
         "--category",
-        choices=["single_tool", "no_tool", "multi_tool"],
+        choices=["single_tool", "no_tool", "multi_tool", "multi_turn"],
         help="Run only tests in this category",
     )
     args = parser.parse_args()
+
+    # Resolve defaults based on --direct flag
+    if args.direct:
+        if args.model is None:
+            args.model = "devstral:latest"
+        if args.url is None:
+            args.url = "http://localhost:11434"
+    else:
+        if args.model is None:
+            args.model = "proteus"
+        if args.url is None:
+            args.url = os.environ.get("AGENT_URL", "http://bigfish:31400")
 
     testsToRun = ALL_TESTS
     if args.category:
         testsToRun = [t for t in ALL_TESTS if t["category"] == args.category]
 
+    modeLabel = "direct (Ollama)" if args.direct else "proxy (Proteus)"
     print()
     print("=" * 60)
     print("  Tool Calling Test Suite")
     print("=" * 60)
+    print(f"  Mode:  {modeLabel}")
     print(f"  Model: {args.model}")
     print(f"  URL:   {args.url}")
     print(f"  Tests: {len(testsToRun)}")
     print()
 
-    # Preflight check, verify Ollama is reachable
+    # Preflight check, verify endpoint is reachable
+    preflightPath = "/health" if not args.direct else "/"
     try:
-        preflight = requests.get(f"{args.url}/", timeout=5)
+        preflight = requests.get(f"{args.url}{preflightPath}", timeout=5)
         preflight.raise_for_status()
     except requests.exceptions.RequestException as exc:
-        print(f"  Cannot reach Ollama at {args.url}: {exc}")
+        print(f"  Cannot reach {args.url}: {exc}")
         print("  Aborting.")
         sys.exit(1)
 
@@ -496,7 +682,10 @@ def main():
     for i, testCase in enumerate(testsToRun, 1):
         label = f"[{i}/{len(testsToRun)}] {testCase['name']}"
         print(f"  Running {label}...", end="", flush=True)
-        testResult = runTest(args.url, args.model, testCase)
+        if testCase["category"] == "multi_turn":
+            testResult = runMultiTurnTest(args.url, args.model, testCase)
+        else:
+            testResult = runTest(args.url, args.model, testCase)
         statusSymbol = "ok" if testResult["passed"] else "FAIL"
         print(f" {statusSymbol} ({testResult['latencyMs']:.0f}ms)")
         results.append(testResult)

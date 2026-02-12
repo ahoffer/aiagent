@@ -203,6 +203,33 @@ def _ollama_tool_calls_to_openai(tool_calls: list[dict]) -> list[dict]:
     return openai_calls
 
 
+def _log_tool_call_outcome(tool_calls, tools_offered: bool, stream: bool):
+    """Log tool call details for proxy-path observability.
+
+    Emits one log line per request summarizing whether the model called
+    tools or answered directly. Logs tool names and argument keys only,
+    not argument values, to keep logs useful without leaking payload data.
+    """
+    mode = "stream" if stream else "non-stream"
+    if tool_calls:
+        for tc in tool_calls:
+            fn = tc.get("function", {})
+            name = fn.get("name", "unknown")
+            raw_args = fn.get("arguments", {})
+            if isinstance(raw_args, str):
+                try:
+                    arg_keys = list(json.loads(raw_args).keys())
+                except (json.JSONDecodeError, AttributeError):
+                    arg_keys = ["<unparseable>"]
+            elif isinstance(raw_args, dict):
+                arg_keys = list(raw_args.keys())
+            else:
+                arg_keys = []
+            log.info("proxy %s tool_call name=%s arg_keys=%s", mode, name, arg_keys)
+    elif tools_offered:
+        log.info("proxy %s model chose direct answer despite tools offered", mode)
+
+
 def _build_ollama_options(request) -> dict:
     """Extract Ollama options from the OpenAI request parameters."""
     opts = {}
@@ -440,6 +467,9 @@ async def _openai_non_streaming(request: OpenAIChatRequest):
         openai_msg["tool_calls"] = _ollama_tool_calls_to_openai(tool_calls)
         finish = "tool_calls"
 
+    _log_tool_call_outcome(
+        openai_msg.get("tool_calls"), tools_offered=bool(request.tools), stream=False)
+
     return {
         "id": completion_id,
         "object": "chat.completion",
@@ -508,6 +538,8 @@ async def _openai_streaming(request: OpenAIChatRequest):
 
                     if is_done:
                         tool_calls = ollama_msg.get("tool_calls")
+                        _log_tool_call_outcome(
+                            tool_calls, tools_offered=bool(request.tools), stream=True)
                         if tool_calls:
                             openai_calls = _ollama_tool_calls_to_openai(tool_calls)
                             tc_chunk = {
