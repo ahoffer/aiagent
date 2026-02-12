@@ -80,6 +80,24 @@ extensions:
       - mcp-shell-server
     envs:
       ALLOW_COMMANDS: "ls,cat,head,tail,grep,find,wc,sort,uniq,diff,git,python3,node,npm,make,kubectl,curl"
+  aiforge:
+    enabled: true
+    name: aiforge
+    type: stdio
+    cmd: uv
+    args:
+      - run
+      - --with
+      - mcp
+      - --with
+      - requests
+      - python3
+      - ${SCRIPT_DIR}/../mcp/aiforge-server.py
+    envs:
+      SEARXNG_URL: ${SEARXNG_URL}
+      QDRANT_URL: ${QDRANT_URL}
+      PROTEUS_URL: ${AGENT_URL}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL}
 EOF
 
 if command -v curl &>/dev/null; then

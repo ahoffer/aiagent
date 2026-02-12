@@ -42,14 +42,36 @@ Local models sometimes misinterpret intent. Use explicit phrasing like "analyze 
 
 FastAPI app in `images/proteus/`. All endpoints run through a single two-node LangGraph workflow that calls Ollama with native tool calling and executes `web_search` server-side via SearXNG. The orchestrator node calls the model, and the tools node dispatches tool calls and loops back until the model produces a final answer.
 
-API endpoints:
+Endpoint Surface (Native + OpenAI Compatibility):
 
-- `POST /chat` - native chat with sources
-- `POST /chat/stream` - SSE streaming with node progress
-- `POST /v1/chat/completions` - OpenAI-compatible proxy (streaming and non-streaming)
-- `GET /v1/models` - model list for client discovery
-- `GET /health` - dependency health check
-- `GET /docs` - interactive OpenAPI docs
+| Surface | Method | Endpoint | Implemented | Purpose / Notes |
+|---------|--------|----------|-------------|-----------------|
+| Native | POST | `/chat` | YES | Native chat with sources via LangGraph workflow. |
+| Native | POST | `/chat/stream` | YES | SSE streaming with node progress events. |
+| Native | GET | `/health` | YES | Dependency health check. |
+| Native | GET | `/docs` | YES | FastAPI OpenAPI docs UI. |
+| OpenAI-compatible | POST | `/v1/chat/completions` | YES | OpenAI-style chat proxy (streaming + non-streaming). |
+| OpenAI-compatible | POST | `/v1/embeddings` | YES | OpenAI-style embeddings proxy. |
+| OpenAI-compatible | GET | `/v1/models` | YES | Model list for client discovery. |
+| OpenAI main | POST | `/v1/responses` | NO | Not currently implemented. |
+| OpenAI main | GET | `/v1/responses/{response_id}` | NO | Not currently implemented. |
+| OpenAI main | DELETE | `/v1/responses/{response_id}` | NO | Not currently implemented. |
+| OpenAI main | POST | `/v1/images/generations` | NO | Not currently implemented. |
+| OpenAI main | POST | `/v1/images/edits` | NO | Not currently implemented. |
+| OpenAI main | POST | `/v1/audio/transcriptions` | NO | Not currently implemented. |
+| OpenAI main | POST | `/v1/audio/translations` | NO | Not currently implemented. |
+| OpenAI main | POST | `/v1/audio/speech` | NO | Not currently implemented. |
+| OpenAI main | POST | `/v1/moderations` | NO | Not currently implemented. |
+| OpenAI main | GET | `/v1/models/{model}` | NO | Not currently implemented. |
+| OpenAI main | POST | `/v1/files` | NO | Not currently implemented. |
+| OpenAI main | GET | `/v1/files` | NO | Not currently implemented. |
+| OpenAI main | GET | `/v1/files/{file_id}` | NO | Not currently implemented. |
+| OpenAI main | DELETE | `/v1/files/{file_id}` | NO | Not currently implemented. |
+| OpenAI main | POST | `/v1/uploads` | NO | Not currently implemented. |
+| OpenAI main | POST | `/v1/batches` | NO | Not currently implemented. |
+| OpenAI main | POST | `/v1/fine_tuning/jobs` | NO | Not currently implemented. |
+| OpenAI main | POST | `/v1/vector_stores` | NO | Not currently implemented. |
+| OpenAI main | POST | `/v1/realtime` | NO | Not currently implemented. |
 
 Build: `cd images/proteus && ./build.sh` then `kubectl apply -f k8s/`
 

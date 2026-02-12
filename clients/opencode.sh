@@ -61,6 +61,17 @@ cat > "$OPENCODE_CONFIG_FILE" <<EOF
         "ALLOW_COMMANDS": "ls,cat,head,tail,grep,find,wc,sort,uniq,diff,git,python3,node,npm,make,kubectl,curl"
       },
       "timeout": 10000
+    },
+    "aiforge": {
+      "type": "local",
+      "command": ["uv", "run", "--with", "mcp", "--with", "requests", "python3", "${SCRIPT_DIR}/../mcp/aiforge-server.py"],
+      "environment": {
+        "SEARXNG_URL": "${SEARXNG_URL}",
+        "QDRANT_URL": "${QDRANT_URL}",
+        "PROTEUS_URL": "${AGENT_URL}",
+        "EMBEDDING_MODEL": "${EMBEDDING_MODEL}"
+      },
+      "timeout": 30000
     }
   }
 }

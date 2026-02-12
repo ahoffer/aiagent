@@ -1,16 +1,14 @@
 # proteus.py
 """FastAPI entry point for Proteus.
 
-Proteus is now a thin HTTP shim around the LangGraph agent:
-- /chat and /chat/stream for Open WebUI-style usage
-- /v1/chat/completions OpenAI-compatible endpoint (non-streaming + basic streaming)
-
-All orchestration (tool loop, iteration limit, etc.) lives in LangGraph (graph.py).
-
-Conversation memory:
-- Use LangGraph checkpointer by passing config.thread_id
-- /chat uses conversation_id as thread_id
-- /v1/chat/completions: optionally accept a conversation_id as an extra field
+Two modes of operation:
+- /chat and /chat/stream run the LangGraph agent with server-side tool
+  execution, for Open WebUI and similar thick-server clients.
+- /v1/chat/completions is a transparent proxy to Ollama. It preserves
+  tool_calls in the response so clients like opencode and goose can
+  execute tools client-side via MCP.
+- /v1/embeddings proxies to Ollama's embedding endpoint for MCP servers
+  that cannot reach the cluster-internal Ollama service directly.
 """
 
 import argparse
@@ -23,6 +21,7 @@ import time
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -30,6 +29,11 @@ import uvicorn
 
 from graph import agent_graph
 from clients import OllamaClient, SearxngClient
+
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434").rstrip("/")
+AGENT_MODEL = os.getenv("AGENT_MODEL", "devstral:latest-agent")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
+PROXY_TIMEOUT = 300.0
 
 logging.basicConfig(
     level=logging.INFO,
@@ -123,20 +127,6 @@ def _msg_to_dict(msg) -> dict:
     return d
 
 
-def _thread_id_from_openai_request(request: OpenAIChatRequest) -> str:
-    """
-    Prefer a caller-supplied conversation_id (extra field), else create a new one.
-    This lets OpenAI clients opt into server-side memory by sending conversation_id.
-    """
-    try:
-        data = request.model_dump()  # includes extras because extra=allow
-    except Exception:
-        data = {}
-    conv_id = data.get("conversation_id")
-    if isinstance(conv_id, str) and conv_id.strip():
-        return conv_id.strip()
-    return uuid4().hex
-
 
 # ----------------------------
 # App setup
@@ -145,14 +135,78 @@ def _thread_id_from_openai_request(request: OpenAIChatRequest) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("Proteus starting up")
+    app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(PROXY_TIMEOUT, connect=10.0))
     yield
+    await app.state.http.aclose()
     log.info("Proteus shutting down")
+
+
+# ----------------------------
+# OpenAI <-> Ollama format conversion
+# ----------------------------
+
+def _openai_messages_to_ollama(messages: list[dict]) -> list[dict]:
+    """Convert OpenAI-format messages to Ollama format.
+
+    Main difference: tool_calls[].function.arguments is a JSON string in
+    OpenAI but a dict in Ollama.
+    """
+    converted = []
+    for msg in messages:
+        out = dict(msg)
+        if "tool_calls" in out and out["tool_calls"]:
+            out["tool_calls"] = [
+                {
+                    **tc,
+                    "function": {
+                        **tc["function"],
+                        "arguments": (
+                            json.loads(tc["function"]["arguments"])
+                            if isinstance(tc["function"]["arguments"], str)
+                            else tc["function"]["arguments"]
+                        ),
+                    },
+                }
+                for tc in out["tool_calls"]
+            ]
+        converted.append(out)
+    return converted
+
+
+def _ollama_tool_calls_to_openai(tool_calls: list[dict]) -> list[dict]:
+    """Convert Ollama tool_calls to OpenAI format."""
+    openai_calls = []
+    for i, tc in enumerate(tool_calls):
+        fn = tc.get("function", {})
+        args = fn.get("arguments", {})
+        openai_calls.append({
+            "id": tc.get("id") or f"call_{uuid4().hex[:8]}",
+            "type": "function",
+            "index": i,
+            "function": {
+                "name": fn.get("name", ""),
+                "arguments": json.dumps(args) if isinstance(args, dict) else str(args),
+            },
+        })
+    return openai_calls
+
+
+def _build_ollama_options(request) -> dict:
+    """Extract Ollama options from the OpenAI request parameters."""
+    opts = {}
+    if request.max_tokens is not None:
+        opts["num_predict"] = request.max_tokens
+    if request.temperature is not None:
+        opts["temperature"] = request.temperature
+    if request.top_p is not None:
+        opts["top_p"] = request.top_p
+    return opts
 
 
 app = FastAPI(
     title="Proteus",
-    description="Thin HTTP shim over LangGraph agent",
-    version="4.0.0",
+    description="LangGraph agent and transparent Ollama proxy",
+    version="5.0.0",
     lifespan=lifespan,
 )
 
@@ -301,72 +355,138 @@ async def openai_chat_completions(request: OpenAIChatRequest):
 async def _openai_non_streaming(request: OpenAIChatRequest):
     completion_id = f"chatcmpl-{uuid4().hex[:12]}"
     created = int(time.time())
+    http: httpx.AsyncClient = app.state.http
 
-    thread_id = _thread_id_from_openai_request(request)
     messages = [_msg_to_dict(m) for m in request.messages]
+    ollama_messages = _openai_messages_to_ollama(messages)
+    model = AGENT_MODEL if request.model in ("proteus", None) else request.model
+
+    ollama_payload = {
+        "model": model,
+        "messages": ollama_messages,
+        "stream": False,
+    }
+    if request.tools:
+        ollama_payload["tools"] = request.tools
+    opts = _build_ollama_options(request)
+    if opts:
+        ollama_payload["options"] = opts
 
     try:
-        result = await asyncio.to_thread(
-            agent_graph.invoke,
-            {"messages": messages, "tools": request.tools or []},
-            {"configurable": {"thread_id": thread_id}},
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        resp = await http.post(f"{OLLAMA_URL}/api/chat", json=ollama_payload)
+    except httpx.TimeoutException:
+        return JSONResponse(status_code=504, content={
+            "error": {"message": "Ollama request timed out", "type": "timeout_error"},
+        })
+    except httpx.ConnectError:
+        return JSONResponse(status_code=502, content={
+            "error": {"message": "Cannot connect to Ollama", "type": "connection_error"},
+        })
 
-    content = result.get("final_response", "") or ""
-    resp = {
+    if resp.status_code != 200:
+        return JSONResponse(status_code=resp.status_code, content={
+            "error": {"message": f"Ollama returned HTTP {resp.status_code}", "type": "upstream_error"},
+        })
+
+    body = resp.json()
+    ollama_msg = body.get("message", {})
+    content = ollama_msg.get("content", "") or ""
+    tool_calls = ollama_msg.get("tool_calls")
+
+    openai_msg = {"role": "assistant", "content": content}
+    finish = "stop"
+    if tool_calls:
+        openai_msg["tool_calls"] = _ollama_tool_calls_to_openai(tool_calls)
+        finish = "tool_calls"
+
+    return {
         "id": completion_id,
         "object": "chat.completion",
         "created": created,
         "model": request.model or "proteus",
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": content},
-                "finish_reason": "stop",
-            }
-        ],
+        "choices": [{"index": 0, "message": openai_msg, "finish_reason": finish}],
     }
-    return resp
 
 
 async def _openai_streaming(request: OpenAIChatRequest):
     completion_id = f"chatcmpl-{uuid4().hex[:12]}"
     created = int(time.time())
+    http: httpx.AsyncClient = app.state.http
 
-    thread_id = _thread_id_from_openai_request(request)
     messages = [_msg_to_dict(m) for m in request.messages]
+    ollama_messages = _openai_messages_to_ollama(messages)
+    model = AGENT_MODEL if request.model in ("proteus", None) else request.model
+
+    ollama_payload = {
+        "model": model,
+        "messages": ollama_messages,
+        "stream": True,
+    }
+    if request.tools:
+        ollama_payload["tools"] = request.tools
+    opts = _build_ollama_options(request)
+    if opts:
+        ollama_payload["options"] = opts
+
+    model_label = request.model or "proteus"
 
     async def generate():
         try:
-            result = await asyncio.to_thread(
-                agent_graph.invoke,
-                {"messages": messages, "tools": request.tools or []},
-                {"configurable": {"thread_id": thread_id}},
-            )
-            content = result.get("final_response", "") or ""
+            async with http.stream("POST", f"{OLLAMA_URL}/api/chat", json=ollama_payload) as resp:
+                if resp.status_code != 200:
+                    err = {"error": {"message": f"Ollama returned HTTP {resp.status_code}", "type": "upstream_error"}}
+                    yield f"data: {json.dumps(err)}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
 
-            chunk = {
-                "id": completion_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": request.model or "proteus",
-                "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}],
-            }
-            yield f"data: {json.dumps(chunk)}\n\n"
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    ollama_msg = data.get("message", {})
+                    content = ollama_msg.get("content", "")
+                    is_done = data.get("done", False)
 
-            done = {
-                "id": completion_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": request.model or "proteus",
-                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-            }
-            yield f"data: {json.dumps(done)}\n\n"
+                    if content:
+                        chunk = {
+                            "id": completion_id,
+                            "object": "chat.completion.chunk",
+                            "created": created,
+                            "model": model_label,
+                            "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}],
+                        }
+                        yield f"data: {json.dumps(chunk)}\n\n"
+
+                    if is_done:
+                        tool_calls = ollama_msg.get("tool_calls")
+                        if tool_calls:
+                            openai_calls = _ollama_tool_calls_to_openai(tool_calls)
+                            tc_chunk = {
+                                "id": completion_id,
+                                "object": "chat.completion.chunk",
+                                "created": created,
+                                "model": model_label,
+                                "choices": [{"index": 0, "delta": {"tool_calls": openai_calls}, "finish_reason": None}],
+                            }
+                            yield f"data: {json.dumps(tc_chunk)}\n\n"
+
+                        finish = "tool_calls" if tool_calls else "stop"
+                        done_chunk = {
+                            "id": completion_id,
+                            "object": "chat.completion.chunk",
+                            "created": created,
+                            "model": model_label,
+                            "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
+                        }
+                        yield f"data: {json.dumps(done_chunk)}\n\n"
+                        yield "data: [DONE]\n\n"
+                        return
+        except httpx.TimeoutException:
+            err = {"error": {"message": "Ollama request timed out", "type": "timeout_error"}}
+            yield f"data: {json.dumps(err)}\n\n"
             yield "data: [DONE]\n\n"
-        except Exception as e:
-            err = {"error": str(e)}
+        except httpx.ConnectError:
+            err = {"error": {"message": "Cannot connect to Ollama", "type": "connection_error"}}
             yield f"data: {json.dumps(err)}\n\n"
             yield "data: [DONE]\n\n"
 
@@ -375,6 +495,50 @@ async def _openai_streaming(request: OpenAIChatRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
+
+
+class EmbeddingRequest(BaseModel):
+    model_config = {"extra": "allow"}
+    model: str = "nomic-embed-text"
+    input: str | list[str] = ""
+
+
+@app.post("/v1/embeddings")
+async def embeddings(request: EmbeddingRequest):
+    http: httpx.AsyncClient = app.state.http
+    model = EMBEDDING_MODEL if request.model in ("proteus", None) else request.model
+    text_input = request.input if isinstance(request.input, list) else [request.input]
+
+    try:
+        resp = await http.post(
+            f"{OLLAMA_URL}/api/embed",
+            json={"model": model, "input": text_input},
+        )
+    except httpx.TimeoutException:
+        return JSONResponse(status_code=504, content={
+            "error": {"message": "Ollama embedding request timed out", "type": "timeout_error"},
+        })
+    except httpx.ConnectError:
+        return JSONResponse(status_code=502, content={
+            "error": {"message": "Cannot connect to Ollama", "type": "connection_error"},
+        })
+
+    if resp.status_code != 200:
+        return JSONResponse(status_code=resp.status_code, content={
+            "error": {"message": f"Ollama returned HTTP {resp.status_code}", "type": "upstream_error"},
+        })
+
+    body = resp.json()
+    embeddings_list = body.get("embeddings", [])
+
+    return {
+        "object": "list",
+        "model": model,
+        "data": [
+            {"object": "embedding", "index": i, "embedding": vec}
+            for i, vec in enumerate(embeddings_list)
+        ],
+    }
 
 
 def main():
