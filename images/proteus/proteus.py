@@ -464,7 +464,11 @@ async def _openai_streaming(request: OpenAIChatRequest):
                 async for line in resp.aiter_lines():
                     if not line:
                         continue
-                    data = json.loads(line)
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        log.warning("Skipping malformed chunk from Ollama: %r", line[:200])
+                        continue
                     ollama_msg = data.get("message", {})
                     content = ollama_msg.get("content", "")
                     is_done = data.get("done", False)
@@ -509,6 +513,11 @@ async def _openai_streaming(request: OpenAIChatRequest):
             yield "data: [DONE]\n\n"
         except httpx.ConnectError:
             err = {"error": {"message": "Cannot connect to Ollama", "type": "connection_error"}}
+            yield f"data: {json.dumps(err)}\n\n"
+            yield "data: [DONE]\n\n"
+        except json.JSONDecodeError as e:
+            log.warning("JSON decode error in stream: %s", e)
+            err = {"error": {"message": "Malformed response from upstream", "type": "parse_error"}}
             yield f"data: {json.dumps(err)}\n\n"
             yield "data: [DONE]\n\n"
 

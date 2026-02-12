@@ -1,8 +1,10 @@
-"""Tests for Proteus OpenAI-compatible message conversion."""
+"""Tests for Proteus OpenAI-compatible proxy functions and streaming."""
 
+import json
 import os
 import sys
-from unittest.mock import MagicMock
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -211,3 +213,46 @@ class TestMalformedToolCallsEndpoint:
         })
         assert resp.status_code == 400
         assert "Invalid JSON" in resp.json()["detail"]
+
+
+class TestMalformedStreamChunks:
+    """Verify that malformed JSON chunks in the Ollama stream are skipped."""
+
+    def test_malformed_chunk_skipped_and_valid_content_arrives(self):
+        lines = [
+            "this is not json",
+            '{"message": {"content": "hello"}, "done": false}',
+            '{"message": {"content": ""}, "done": true}',
+        ]
+
+        async def mock_aiter_lines():
+            for line in lines:
+                yield line
+
+        mock_resp = AsyncMock()
+        mock_resp.status_code = 200
+        mock_resp.aiter_lines = mock_aiter_lines
+
+        @asynccontextmanager
+        async def mock_stream(*args, **kwargs):
+            yield mock_resp
+
+        with TestClient(app) as client:
+            app.state.http.stream = mock_stream
+            resp = client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "proteus",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "stream": True,
+                },
+            )
+
+        assert resp.status_code == 200
+        events = resp.text
+        # Valid content chunk should appear in the SSE stream
+        assert '"hello"' in events
+        # Stream should terminate cleanly with the SSE done marker
+        assert "data: [DONE]" in events
+        # Malformed line should not leak into the response
+        assert "this is not json" not in events

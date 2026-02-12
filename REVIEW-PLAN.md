@@ -4,18 +4,7 @@ Expert review identified seven issues. This plan addresses them in order of
 effort-to-impact ratio, starting with small high-confidence fixes and building
 toward the larger structural change.
 
-## 1. JSON crash on malformed tool-call arguments
-
-`_openai_messages_to_ollama` calls `json.loads` without a try/except. A client
-sending invalid JSON in `tool_calls[].function.arguments` gets a 500 instead
-of a 400.
-
-Fix: wrap the `json.loads` call in a try/except that raises `HTTPException(400)`.
-Add a test that sends malformed arguments and asserts 400.
-
-Files: `images/proteus/proteus.py`, `images/proteus/tests/tests/test_proxy.py`
-
-## 2. Streaming parser brittle to malformed chunks
+## 1. Streaming parser brittle to malformed chunks
 
 `_openai_streaming` calls `json.loads(line)` with no guard. A malformed chunk
 from Ollama raises `json.JSONDecodeError` that kills the SSE stream without
@@ -27,7 +16,7 @@ generator. Add a test.
 
 Files: `images/proteus/proteus.py`, `images/proteus/tests/tests/test_proxy.py`
 
-## 3. tool_choice accepted but ignored
+## 2. tool_choice accepted but ignored
 
 `OpenAIChatRequest` declares `tool_choice` but neither `_openai_non_streaming`
 nor `_openai_streaming` forwards it in the Ollama payload.
@@ -38,7 +27,7 @@ reaches the payload.
 
 Files: `images/proteus/proteus.py`, `images/proteus/tests/tests/test_proxy.py`
 
-## 4. /chat/stream is not actually streaming
+## 3. /chat/stream is not actually streaming
 
 `chat_stream` materializes the entire graph output with `list(agent_graph.stream(...))`
 before yielding SSE events. First-token latency equals full-run latency.
@@ -50,7 +39,7 @@ incrementally. Add a test that verifies events arrive before the graph completes
 
 Files: `images/proteus/proteus.py`, `images/proteus/tests/tests/test_proxy.py`
 
-## 5. Prompt injection boundary for tool outputs
+## 4. Prompt injection boundary for tool outputs
 
 Raw tool output from web search is fed into the model context as trusted
 `role: "tool"` content. Hostile search snippets could steer model behavior.
@@ -61,7 +50,7 @@ to a reasonable maximum length.
 
 Files: `images/proteus/graph.py`
 
-## 6. Regression tests for all fixes
+## 5. Regression tests for all fixes
 
 Current tests cover happy-path conversion only. Each fix above should include
 its own test, but this item covers an integration-level pass to ensure the
@@ -74,6 +63,19 @@ failure modes are covered end to end.
 - Tool output length bounded
 
 Files: `images/proteus/tests/tests/test_proxy.py`, `images/proteus/tests/tests/test_graph.py`
+
+## 6. Install script uses stale pod name during model warmup
+
+`install.sh` captures `OLLAMA_POD` once at line 47, then uses it for all
+subsequent `kubectl exec` calls. If the Ollama pod crashes and gets replaced
+during model alias creation, the variable holds a dead pod name and every
+retry attempt fails with "cannot exec into a container in a completed pod;
+current phase is Failed", looping for 3 minutes before giving up.
+
+Fix: re-resolve the pod name inside the retry loop so each attempt targets the
+current running pod. Also check pod phase before attempting exec.
+
+Files: `install.sh`
 
 ## 7. Durable and bounded conversation memory
 
