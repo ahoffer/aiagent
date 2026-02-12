@@ -1,6 +1,6 @@
 # Local AI Agent Stack
 
-Self-hosted AI platform on Kubernetes with GPU-accelerated inference, web search, vector storage, and chat.
+Self-hosted AI platform on Kubernetes with GPU-accelerated inference, web search, and vector storage.
 
 ## Vision
 - The goal is agentic software development in which engineers supervise and guide AI agents rather than writing most code by hand.
@@ -8,14 +8,13 @@ Self-hosted AI platform on Kubernetes with GPU-accelerated inference, web search
 
 ## Architecture
 
-Five services in the `aiforge` namespace.
+Four services in the `aiforge` namespace.
 
 | Service | Role | Cluster DNS | NodePort |
 |---------|------|-------------|----------|
 | Ollama | GPU model serving | ollama:11434 | cluster-internal |
 | SearXNG | Web search aggregation | searxng:8080 | :31080 |
 | Qdrant | Vector embeddings for RAG | qdrant:6333 | :31333 |
-| Open WebUI | Browser chat interface | open-webui:8080 | :31380 |
 | Proteus | LangGraph agent with native tool calling | proteus:8000 | :31400 |
 
 ## Quick Start
@@ -26,7 +25,7 @@ Prerequisites: Kubernetes cluster with GPU support, NVIDIA device plugin, kubect
 ./install.sh
 ```
 
-Verify with `./tests/test-stack.sh` and `./tests/test-services.sh`, then open `http://localhost:31380`.
+Verify with `./tests/test-stack.sh` and `./tests/test-services.sh`.
 
 ## Frontends
 
@@ -34,7 +33,6 @@ Verify with `./tests/test-stack.sh` and `./tests/test-services.sh`, then open `h
 |----------|-------------|
 | `goose.sh` | Terminal coding agent with MCP tool calling (web search, files, git, shell) |
 | `opencode.sh` | Terminal coding assistant with MCP tool calling and TUI |
-| [Open WebUI](http://localhost:31380) | Browser chat routed through Proteus via OpenAI-compatible endpoint |
 
 Routing contract: `client -> proteus -> ollama`. Clients should never target Ollama directly.
 
@@ -55,6 +53,8 @@ API endpoints:
 
 Build: `cd images/proteus && ./build.sh` then `kubectl apply -f k8s/`
 
+TODO: extend Qdrant integration beyond tool-based retrieval by adding ingestion pipelines and thread-aware retrieval memory in the LangGraph loop.
+
 ## Configuration
 
 Launcher scripts source `defaults.sh`. Override any variable at launch.
@@ -73,7 +73,7 @@ Cluster-side settings live in ConfigMaps in `proteus.yaml`.
 ## Testing
 
 - `test-stack.sh` - health, inference, tool calling, token speed
-- `test-services.sh` - Qdrant CRUD, SearXNG, Open WebUI, embeddings, cross-service wiring
+- `test-services.sh` - Qdrant CRUD, SearXNG, embeddings
 - `test-agent.sh` - agent API including chat, streaming, and OpenAI-compatible endpoints
 - `test-proxy-web-search-smoke.sh` - verifies server-side `web_search` executes for recency prompts on `/v1/chat/completions`
 - `test-tool-calling.py` - 12 prompts across single-tool, no-tool, multi-tool categories

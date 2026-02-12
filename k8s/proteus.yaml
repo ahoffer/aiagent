@@ -7,6 +7,7 @@ metadata:
 data:
   OLLAMA_URL: "http://ollama:11434"
   SEARXNG_URL: "http://searxng:8080"
+  QDRANT_URL: "http://qdrant:6333"
   AGENT_MODEL: "devstral:latest-agent"
   AGENT_MAX_TOKENS: "2048"
 ---
@@ -29,7 +30,7 @@ spec:
     spec:
       containers:
         - name: proteus
-          image: proteus:latest
+          image: proteus:21d479312a86
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
@@ -44,13 +45,13 @@ spec:
               memory: 1Gi
           readinessProbe:
             httpGet:
-              path: /health
+              path: /health/ready
               port: 8000
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /health
+              path: /health/live
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 30

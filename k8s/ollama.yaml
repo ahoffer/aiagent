@@ -89,21 +89,36 @@ spec:
                   - /bin/sh
                   - -c
                   - |
-                    sleep 10
-                    # Create tuned model alias with verbosity controls from ConfigMap
-                    cat > /tmp/Modelfile <<EOF
-                    FROM $DEFAULT_MODEL
-                    PARAMETER temperature $AGENT_TEMPERATURE
-                    PARAMETER num_predict $AGENT_MAX_TOKENS
-                    PARAMETER top_p $AGENT_TOP_P
-                    PARAMETER repeat_penalty $AGENT_REPEAT_PENALTY
-                    SYSTEM $AGENT_SYSTEM_PROMPT
-                    EOF
-                    ollama create "${DEFAULT_MODEL}-agent" -f /tmp/Modelfile > /dev/null 2>&1 || true
-                    # Warmup the tuned alias
-                    curl -s --max-time 120 http://localhost:11434/api/generate \
-                      -d "{\"model\": \"${DEFAULT_MODEL}-agent\", \"prompt\": \"hi\", \"stream\": false, \"options\": {\"num_predict\": 1}}" \
-                      > /dev/null 2>&1 || true
+                    # Wait for local Ollama API to be ready before alias creation.
+                    ready=false
+                    i=1
+                    while [ "$i" -le 30 ]; do
+                      if ollama list >/dev/null 2>&1; then
+                        ready=true
+                        break
+                      fi
+                      sleep 2
+                      i=$((i + 1))
+                    done
+
+                    if [ "$ready" != "true" ]; then
+                      echo "postStart: Ollama API not ready, skipping alias creation"
+                      exit 0
+                    fi
+
+                    # Create tuned model alias with verbosity controls from ConfigMap.
+                    {
+                      echo "FROM ${DEFAULT_MODEL}"
+                      echo "PARAMETER temperature ${AGENT_TEMPERATURE}"
+                      echo "PARAMETER num_predict ${AGENT_MAX_TOKENS}"
+                      echo "PARAMETER top_p ${AGENT_TOP_P}"
+                      echo "PARAMETER repeat_penalty ${AGENT_REPEAT_PENALTY}"
+                      printf "SYSTEM %s\n" "${AGENT_SYSTEM_PROMPT}"
+                    } > /tmp/Modelfile
+
+                    if ! ollama show "${DEFAULT_MODEL}-agent" >/dev/null 2>&1; then
+                      ollama create "${DEFAULT_MODEL}-agent" -f /tmp/Modelfile || true
+                    fi
           resources:
             requests:
               memory: 2Gi

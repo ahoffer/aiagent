@@ -9,16 +9,21 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# Two levels up from tests/tests/ to reach images/proteus/ where source modules live
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 # Mock langgraph before importing graph.py
 _mock_langgraph = MagicMock()
 _mock_langgraph_graph = MagicMock()
 _mock_langgraph_graph.END = "__end__"
 _mock_langgraph_graph_state = MagicMock()
+_mock_langgraph_checkpoint = MagicMock()
+_mock_langgraph_checkpoint_memory = MagicMock()
 sys.modules["langgraph"] = _mock_langgraph
 sys.modules["langgraph.graph"] = _mock_langgraph_graph
 sys.modules["langgraph.graph.state"] = _mock_langgraph_graph_state
+sys.modules["langgraph.checkpoint"] = _mock_langgraph_checkpoint
+sys.modules["langgraph.checkpoint.memory"] = _mock_langgraph_checkpoint_memory
 
 _mock_langchain_core = MagicMock()
 _mock_langchain_core_globals = MagicMock()

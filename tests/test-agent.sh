@@ -26,6 +26,13 @@ else
     report "Agent /health returns status=$healthStatus" "false"
 fi
 
+# Explicitly fail if the endpoint returns a valid but unhealthy state.
+if [ "$healthStatus" = "unhealthy" ]; then
+    report "Agent /health is not unhealthy" "false"
+else
+    report "Agent /health is not unhealthy" "true"
+fi
+
 # Check that service statuses are present
 serviceCount=$(echo "$healthJson" | python3 -c "
 import sys, json
@@ -60,7 +67,7 @@ try:
     convId = d.get('conversation_id', '')
     searchCount = d.get('search_count', 0)
     if response:
-        print(f'ok|{searchCount}|{convId[:8]}|{response[:100]}')
+        print(f'ok|{searchCount}|{convId}|{response[:100]}')
     else:
         print(f'empty|0||')
 except Exception as e:

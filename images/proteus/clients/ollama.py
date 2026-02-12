@@ -131,7 +131,6 @@ class OllamaClient:
         }
         if tools:
             payload["tools"] = tools
-            payload["options"] = {"enable_thinking": False}
 
         if stream:
             return self._stream_chat(payload)

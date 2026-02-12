@@ -4,6 +4,10 @@
 Two-node graph where the orchestrator calls Ollama with native tool calling.
 If the LLM returns tool_calls, the tools node executes them and loops back.
 If the LLM returns a text answer, the graph terminates.
+
+Conversation memory:
+- Enabled via a LangGraph checkpointer
+- Caller must pass config={"configurable": {"thread_id": <conversation_id>}}
 """
 
 import json
@@ -17,9 +21,10 @@ from uuid import uuid4
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.globals import set_debug
 
-from clients import OllamaClient, SearxngClient
+from clients import OllamaClient, QdrantClient, SearxngClient
 from tools import DEFAULT_TOOLS, execute_tool, merge_tools
 
 set_debug(os.getenv("LANGGRAPH_DEBUG", "").lower() in ("1", "true"))
@@ -35,6 +40,9 @@ SYSTEM_PROMPT = (
     "For stable, well-known facts, respond directly without web_search.\n"
 )
 
+# Checkpointer enables per-thread conversation memory.
+# InMemorySaver is process-local (lost on restart). Swap for SQLite/Postgres saver for persistence.
+_CHECKPOINTER = InMemorySaver()
 
 _URL_RE = re.compile(r"https?://[^\s)>\"]+")
 
@@ -43,11 +51,7 @@ def _extract_urls(text: str) -> list[str]:
     if not text:
         return []
     urls = _URL_RE.findall(text)
-    # basic cleanup: strip trailing punctuation
-    cleaned = []
-    for u in urls:
-        cleaned.append(u.rstrip(".,;:)]}>\"'"))
-    # de-dupe preserving order
+    cleaned = [u.rstrip(".,;:)]}>\"'") for u in urls]
     seen = set()
     out = []
     for u in cleaned:
@@ -79,7 +83,6 @@ class AgentState(TypedDict, total=False):
 
 def _ensure_system_prompt(messages: list[dict]) -> list[dict]:
     if messages and messages[0].get("role") == "system":
-        # prepend policy to existing system prompt content
         first = dict(messages[0])
         content = str(first.get("content", ""))
         first["content"] = f"{SYSTEM_PROMPT}\n{content}" if content else SYSTEM_PROMPT
@@ -102,8 +105,12 @@ def orchestrator_node(state: AgentState) -> dict:
             {"role": "user", "content": user_message},
         ]
     else:
-        # Ensure we always have a system policy prompt at the front
+        # Followup turn. Checkpointer restored prior messages from state,
+        # but new user input from the request must still be appended.
         messages = _ensure_system_prompt(messages)
+        user_message = state.get("message")
+        if user_message:
+            messages.append({"role": "user", "content": user_message})
 
     model = os.getenv("AGENT_MODEL", "devstral:latest-agent")
     tools = merge_tools(DEFAULT_TOOLS, state.get("tools"))
@@ -117,19 +124,16 @@ def orchestrator_node(state: AgentState) -> dict:
         return {"final_response": f"Error: model request failed: {e}"}
     elapsed = time.time() - t0
 
-    # Append assistant response
     messages = messages + [response_message]
 
-    tool_iters = state.get("tool_iterations", 0)
+    tool_iters = int(state.get("tool_iterations", 0) or 0)
     tool_calls = response_message.get("tool_calls", []) or []
     content = response_message.get("content", "") or ""
 
     updates: dict = {"messages": messages}
 
-    # If budget exhausted, force final answer and prevent tool routing
     if tool_calls and tool_iters >= MAX_TOOL_ITERATIONS:
         log.warning("Max tool iterations (%d) reached, forcing final answer", MAX_TOOL_ITERATIONS)
-        # Remove tool_calls from the last message stored in messages to avoid routing to tools
         response_message.pop("tool_calls", None)
         messages[-1] = response_message
         updates["messages"] = messages
@@ -169,6 +173,8 @@ def tools_node(state: AgentState) -> dict:
         return {"messages": messages}
 
     searxng = SearxngClient()
+    qdrant = QdrantClient()
+    ollama = OllamaClient()
     tool_iterations += 1
 
     for call in tool_calls:
@@ -202,14 +208,13 @@ def tools_node(state: AgentState) -> dict:
         query = arguments.get("query", "")
         t0 = time.time()
         try:
-            result_text = execute_tool(name, arguments, searxng)
+            result_text = execute_tool(name, arguments, searxng, qdrant, ollama)
         except Exception as e:
             log.exception("Tool execution failed: %s", name)
             result_text = f"Error: tool execution failed for {name}: {e}"
         elapsed = time.time() - t0
         log.info("Tool %s query=%r exec_time=%.1fs", name, query, elapsed)
 
-        # Tool result message (OpenAI-compatible)
         messages.append({
             "role": "tool",
             "tool_call_id": call_id,
@@ -217,7 +222,6 @@ def tools_node(state: AgentState) -> dict:
             "content": result_text,
         })
 
-        # Track sources best-effort (URLs extracted from tool output)
         if name == "web_search":
             search_count += 1
             urls = _extract_urls(result_text)
@@ -244,7 +248,6 @@ def tools_node(state: AgentState) -> dict:
 
 
 def route_after_orchestrator(state: AgentState) -> Literal["tools", "__end__"]:
-    """Route based on whether the orchestrator wants to call tools."""
     if state.get("final_response"):
         return END
 
@@ -275,7 +278,7 @@ def build_graph() -> CompiledStateGraph:
     )
 
     graph.add_edge("tools", "orchestrator")
-    return graph.compile()
+    return graph.compile(checkpointer=_CHECKPOINTER)
 
 
 agent_graph = build_graph()

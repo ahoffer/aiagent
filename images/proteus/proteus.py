@@ -6,6 +6,11 @@ Proteus is now a thin HTTP shim around the LangGraph agent:
 - /v1/chat/completions OpenAI-compatible endpoint (non-streaming + basic streaming)
 
 All orchestration (tool loop, iteration limit, etc.) lives in LangGraph (graph.py).
+
+Conversation memory:
+- Use LangGraph checkpointer by passing config.thread_id
+- /chat uses conversation_id as thread_id
+- /v1/chat/completions: optionally accept a conversation_id as an extra field
 """
 
 import argparse
@@ -19,11 +24,12 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 import uvicorn
 
 from graph import agent_graph
+from clients import OllamaClient, SearxngClient
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,6 +59,7 @@ class ChatResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+    services: dict[str, bool] = {}
 
 
 # ----------------------------
@@ -116,6 +123,21 @@ def _msg_to_dict(msg) -> dict:
     return d
 
 
+def _thread_id_from_openai_request(request: OpenAIChatRequest) -> str:
+    """
+    Prefer a caller-supplied conversation_id (extra field), else create a new one.
+    This lets OpenAI clients opt into server-side memory by sending conversation_id.
+    """
+    try:
+        data = request.model_dump()  # includes extras because extra=allow
+    except Exception:
+        data = {}
+    conv_id = data.get("conversation_id")
+    if isinstance(conv_id, str) and conv_id.strip():
+        return conv_id.strip()
+    return uuid4().hex
+
+
 # ----------------------------
 # App setup
 # ----------------------------
@@ -135,9 +157,41 @@ app = FastAPI(
 )
 
 
+def _dependency_health() -> dict[str, bool]:
+    return {
+        "ollama": OllamaClient().health(),
+        "searxng": SearxngClient().health(),
+    }
+
+
+def _overall_health_status(services: dict[str, bool]) -> str:
+    if services and all(services.values()):
+        return "healthy"
+    if services and any(services.values()):
+        return "degraded"
+    return "unhealthy"
+
+
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
-    return HealthResponse(status="healthy")
+    services = await asyncio.to_thread(_dependency_health)
+    status = _overall_health_status(services)
+    return HealthResponse(status=status, services=services)
+
+
+@app.get("/health/live", response_model=HealthResponse)
+async def health_live():
+    # Liveness should not depend on upstream services.
+    return HealthResponse(status="healthy", services={})
+
+
+@app.get("/health/ready", response_model=HealthResponse)
+async def health_ready():
+    services = await asyncio.to_thread(_dependency_health)
+    status = _overall_health_status(services)
+    status_code = 200 if status == "healthy" else 503
+    body = HealthResponse(status=status, services=services).model_dump()
+    return JSONResponse(status_code=status_code, content=body)
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -148,10 +202,8 @@ async def chat(request: ChatRequest):
     try:
         result = await asyncio.to_thread(
             agent_graph.invoke,
-            {
-                "message": request.message,
-                "conversation_id": conversation_id,
-            },
+            {"message": request.message, "conversation_id": conversation_id},
+            {"configurable": {"thread_id": conversation_id}},
         )
 
         if LOG_LANGGRAPH_OUTPUT:
@@ -182,7 +234,14 @@ async def chat_stream(request: ChatRequest):
     async def generate():
         try:
             graph_input = {"message": request.message, "conversation_id": conversation_id}
-            outputs = await asyncio.to_thread(lambda: list(agent_graph.stream(graph_input)))
+            outputs = await asyncio.to_thread(
+                lambda: list(
+                    agent_graph.stream(
+                        graph_input,
+                        config={"configurable": {"thread_id": conversation_id}},
+                    )
+                )
+            )
 
             for output in outputs:
                 for node_name, node_output in output.items():
@@ -243,14 +302,14 @@ async def _openai_non_streaming(request: OpenAIChatRequest):
     completion_id = f"chatcmpl-{uuid4().hex[:12]}"
     created = int(time.time())
 
+    thread_id = _thread_id_from_openai_request(request)
     messages = [_msg_to_dict(m) for m in request.messages]
 
     try:
-        # Hand the full message history to LangGraph.
-        # graph.py will ensure a policy system prompt exists.
         result = await asyncio.to_thread(
             agent_graph.invoke,
             {"messages": messages, "tools": request.tools or []},
+            {"configurable": {"thread_id": thread_id}},
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -276,6 +335,7 @@ async def _openai_streaming(request: OpenAIChatRequest):
     completion_id = f"chatcmpl-{uuid4().hex[:12]}"
     created = int(time.time())
 
+    thread_id = _thread_id_from_openai_request(request)
     messages = [_msg_to_dict(m) for m in request.messages]
 
     async def generate():
@@ -283,10 +343,10 @@ async def _openai_streaming(request: OpenAIChatRequest):
             result = await asyncio.to_thread(
                 agent_graph.invoke,
                 {"messages": messages, "tools": request.tools or []},
+                {"configurable": {"thread_id": thread_id}},
             )
             content = result.get("final_response", "") or ""
 
-            # Single chunk (basic streaming)
             chunk = {
                 "id": completion_id,
                 "object": "chat.completion.chunk",
@@ -329,6 +389,7 @@ def main():
         uvicorn.run(app, host=args.host, port=args.port)
     elif args.message:
         message = " ".join(args.message)
+        # CLI: single-shot unless you add a conversation_id and pass thread_id.
         result = agent_graph.invoke({"message": message})
         print(result.get("final_response", "No response"))
     else:

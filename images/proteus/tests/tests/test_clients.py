@@ -6,9 +6,10 @@ from unittest.mock import patch, MagicMock
 
 import requests
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# Two levels up from tests/tests/ to reach images/proteus/ where source modules live
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
-from clients import OllamaClient, SearxngClient
+from clients import OllamaClient, QdrantClient, SearxngClient
 
 
 class TestOllamaClient:
@@ -73,10 +74,10 @@ class TestOllamaClient:
             assert isinstance(result, dict)
             assert result["tool_calls"][0]["function"]["name"] == "web_search"
 
-            # Verify tools and thinking suppression were included in payload
+            # Verify tools were included in payload
             call_payload = mock_post.call_args[0][1]
             assert "tools" in call_payload
-            assert call_payload.get("options") == {"enable_thinking": False}
+            assert "options" not in call_payload
 
     def test_chat_with_tools_text_response(self):
         """When tools are provided but model answers directly."""
@@ -143,3 +144,26 @@ class TestSearxngClient:
             text = client.search_text("test")
             assert "Result 1" in text
             assert "http://a.com" in text
+
+
+class TestQdrantClient:
+
+    def test_health_success(self):
+        client = QdrantClient("http://test:6333")
+        with patch("clients.qdrant.requests.get") as mock_get:
+            mock_get.return_value = MagicMock(status_code=200)
+            assert client.health() is True
+
+    def test_search(self):
+        client = QdrantClient("http://test:6333")
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "result": [
+                {"id": 1, "score": 0.91, "payload": {"text": "hello"}},
+            ]
+        }
+        with patch("clients.qdrant.requests.post", return_value=mock_resp) as mock_post:
+            results = client.search("docs", [0.1, 0.2, 0.3], limit=2, with_payload=True)
+            assert len(results) == 1
+            assert results[0]["id"] == 1
+            mock_post.assert_called_once()

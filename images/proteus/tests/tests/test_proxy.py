@@ -4,7 +4,8 @@ import os
 import sys
 from unittest.mock import MagicMock
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# Two levels up from tests/tests/ to reach images/proteus/ where source modules live
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 # Ensure we have real modules (not mocks from test_graph)
 if "clients" in sys.modules and isinstance(sys.modules["clients"], MagicMock):
