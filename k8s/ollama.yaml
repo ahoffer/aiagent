@@ -20,12 +20,17 @@ data:
   OLLAMA_KEEP_ALIVE: "-1"
   OLLAMA_NUM_PARALLEL: "2"
   OLLAMA_MAX_LOADED_MODELS: "1"
+  # Feb 2025: Q8_0 KV cache halves VRAM per token, fitting 16k context in ~2 GB.
+  OLLAMA_KV_CACHE_TYPE: "q8_0"
   DEFAULT_MODEL: "devstral:latest"
   # LLM response tuning. Applied by creating a model alias at startup.
   AGENT_TEMPERATURE: "0.7"
   AGENT_MAX_TOKENS: "2048"
   AGENT_TOP_P: "0.9"
   AGENT_REPEAT_PENALTY: "1.2"
+  # Feb 2025: Ollama defaults to 4096 context. Clients like Goose and opencode
+  # send large tool-heavy prompts that get silently truncated. See ollama#5356.
+  AGENT_NUM_CTX: "16384"
   AGENT_SYSTEM_PROMPT: "Be concise and direct. Avoid filler phrases. When helping with code, ALWAYS search the web for latest documentation, API references, and code examples before answering. Do not rely on potentially outdated training data. Search first, then answer."
 ---
 apiVersion: apps/v1
@@ -113,6 +118,7 @@ spec:
                       echo "PARAMETER num_predict ${AGENT_MAX_TOKENS}"
                       echo "PARAMETER top_p ${AGENT_TOP_P}"
                       echo "PARAMETER repeat_penalty ${AGENT_REPEAT_PENALTY}"
+                      echo "PARAMETER num_ctx ${AGENT_NUM_CTX}"
                       printf "SYSTEM %s\n" "${AGENT_SYSTEM_PROMPT}"
                     } > /tmp/Modelfile
 

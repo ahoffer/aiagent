@@ -32,6 +32,7 @@ log = logging.getLogger(__name__)
 LOG_LANGGRAPH_OUTPUT = os.getenv("LOG_LANGGRAPH_OUTPUT", "true").lower() in ("1", "true")
 
 MAX_TOOL_ITERATIONS = int(os.getenv("MAX_TOOL_ITERATIONS", "5"))
+AGENT_NUM_CTX = int(os.getenv("AGENT_NUM_CTX", "0"))
 
 # Hostile search snippets can inject instructions into model context.
 # Cap total tool output to limit that surface.
@@ -125,9 +126,10 @@ def orchestrator_node(state: AgentState) -> dict:
     tools = merge_tools(DEFAULT_TOOLS, state.get("tools"))
 
     ollama = OllamaClient()
+    opts = {"num_ctx": AGENT_NUM_CTX} if AGENT_NUM_CTX else None
     t0 = time.time()
     try:
-        response_message = ollama.chat(messages, model=model, tools=tools)
+        response_message = ollama.chat(messages, model=model, tools=tools, options=opts)
     except Exception as e:
         log.exception("Ollama chat failed")
         return {"final_response": f"Error: model request failed: {e}"}

@@ -10,6 +10,8 @@ data:
   QDRANT_URL: "http://qdrant:6333"
   AGENT_MODEL: "devstral:latest-agent"
   AGENT_MAX_TOKENS: "2048"
+  # Feb 2025: injected into every Ollama request to override the 4096 default.
+  AGENT_NUM_CTX: "16384"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -30,7 +32,7 @@ spec:
     spec:
       containers:
         - name: proteus
-          image: proteus:bee4c491897a
+          image: proteus:ae4afd5586fd
           imagePullPolicy: Never
           ports:
             - containerPort: 8000

@@ -12,6 +12,9 @@ from unittest.mock import MagicMock, patch
 # Two levels up from tests/tests/ to reach images/proteus/ where source modules live
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
+# Set before graph import so module-level AGENT_NUM_CTX picks it up.
+os.environ.setdefault("AGENT_NUM_CTX", "16384")
+
 # Mock langgraph before importing graph.py
 _mock_langgraph = MagicMock()
 _mock_langgraph_graph = MagicMock()
@@ -146,6 +149,23 @@ def test_orchestrator_max_iterations_uses_fallback_when_no_content(mock_ollama_c
     }
     result = orchestrator_node(state)
     assert "unable to complete" in result["final_response"].lower()
+
+
+@patch.object(graph, "OllamaClient")
+def test_orchestrator_passes_num_ctx_options(mock_ollama_cls):
+    """Orchestrator injects num_ctx so Ollama does not truncate large prompts."""
+    mock_client = MagicMock()
+    mock_client.chat.return_value = {
+        "role": "assistant",
+        "content": "answer",
+    }
+    mock_ollama_cls.return_value = mock_client
+
+    state = {"message": "test query"}
+    orchestrator_node(state)
+
+    call_kwargs = mock_client.chat.call_args
+    assert call_kwargs.kwargs["options"] == {"num_ctx": 16384}
 
 
 # -- Tools node tests --

@@ -107,6 +107,7 @@ class OllamaClient:
         model: str | None = None,
         stream: bool = False,
         tools: list[dict] | None = None,
+        options: dict | None = None,
     ) -> dict | str | Generator[str, None, None]:
         """Send a chat completion request.
 
@@ -117,6 +118,7 @@ class OllamaClient:
             tools: Optional list of tool schemas for native tool calling.
                 When provided, returns the full message dict so the caller
                 can inspect tool_calls. When omitted, returns content string.
+            options: Ollama runtime options like num_ctx, temperature, etc.
 
         Returns:
             Full message dict (when tools provided), content string, or
@@ -131,6 +133,8 @@ class OllamaClient:
         }
         if tools:
             payload["tools"] = tools
+        if options:
+            payload["options"] = options
 
         if stream:
             return self._stream_chat(payload)

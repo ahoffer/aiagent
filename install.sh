@@ -61,6 +61,7 @@ create_model_alias() {
         echo "PARAMETER num_predict ${AGENT_MAX_TOKENS}"
         echo "PARAMETER top_p ${AGENT_TOP_P}"
         echo "PARAMETER repeat_penalty ${AGENT_REPEAT_PENALTY}"
+        echo "PARAMETER num_ctx ${AGENT_NUM_CTX}"
         printf "SYSTEM %s\n" "${AGENT_SYSTEM_PROMPT}"
       } > /tmp/Modelfile
       ollama create "${DEFAULT_MODEL}-agent" -f /tmp/Modelfile >/dev/null

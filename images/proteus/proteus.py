@@ -32,6 +32,9 @@ from clients import OllamaClient, SearxngClient
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434").rstrip("/")
 AGENT_MODEL = os.getenv("AGENT_MODEL", "devstral:latest-agent")
+# Feb 2025: Ollama defaults to 4096 context tokens. Injected into every request
+# to prevent silent truncation of tool-heavy prompts. See ollama/ollama#5356.
+AGENT_NUM_CTX = int(os.getenv("AGENT_NUM_CTX", "0"))
 
 # Sentinel for the sync-to-async queue bridge in chat_stream
 _SENTINEL = object()
@@ -203,6 +206,8 @@ def _ollama_tool_calls_to_openai(tool_calls: list[dict]) -> list[dict]:
 def _build_ollama_options(request) -> dict:
     """Extract Ollama options from the OpenAI request parameters."""
     opts = {}
+    if AGENT_NUM_CTX:
+        opts["num_ctx"] = AGENT_NUM_CTX
     if request.max_tokens is not None:
         opts["num_predict"] = request.max_tokens
     if request.temperature is not None:
@@ -355,23 +360,19 @@ async def chat_stream(request: ChatRequest):
 
 @app.get("/v1/models")
 async def list_models():
-    return {
-        "object": "list",
-        "data": [
-            {"id": "proteus", "object": "model", "created": 0, "owned_by": "local"}
-        ],
-    }
+    model_info = {"id": "proteus", "object": "model", "created": 0, "owned_by": "local"}
+    if AGENT_NUM_CTX:
+        model_info["context_window"] = AGENT_NUM_CTX
+    return {"object": "list", "data": [model_info]}
 
 
 @app.get("/v1/models/{model_id}")
 async def retrieve_model(model_id: str):
     if model_id == "proteus":
-        return {
-            "id": "proteus",
-            "object": "model",
-            "created": 0,
-            "owned_by": "local",
-        }
+        model_info = {"id": "proteus", "object": "model", "created": 0, "owned_by": "local"}
+        if AGENT_NUM_CTX:
+            model_info["context_window"] = AGENT_NUM_CTX
+        return model_info
     raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
 
 

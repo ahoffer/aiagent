@@ -11,6 +11,9 @@ import pytest
 # Two levels up from tests/tests/ to reach images/proteus/ where source modules live
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
+# Set before proteus import so module-level AGENT_NUM_CTX picks it up.
+os.environ.setdefault("AGENT_NUM_CTX", "16384")
+
 # Ensure we have real modules (not mocks from test_graph)
 if "clients" in sys.modules and isinstance(sys.modules["clients"], MagicMock):
     del sys.modules["clients"]
@@ -165,12 +168,12 @@ class TestBuildOllamaOptions:
     def test_maps_parameters(self):
         req = OpenAIChatRequest(max_tokens=100, temperature=0.5, top_p=0.9)
         opts = _build_ollama_options(req)
-        assert opts == {"num_predict": 100, "temperature": 0.5, "top_p": 0.9}
+        assert opts == {"num_ctx": 16384, "num_predict": 100, "temperature": 0.5, "top_p": 0.9}
 
-    def test_empty_when_no_params(self):
+    def test_includes_num_ctx_even_with_no_other_params(self):
         req = OpenAIChatRequest()
         opts = _build_ollama_options(req)
-        assert opts == {}
+        assert opts == {"num_ctx": 16384}
 
 
 class TestRetrieveModel:
@@ -185,10 +188,26 @@ class TestRetrieveModel:
         assert body["object"] == "model"
         assert body["owned_by"] == "local"
 
+    def test_includes_context_window(self):
+        resp = self.client.get("/v1/models/proteus")
+        assert resp.status_code == 200
+        assert resp.json()["context_window"] == 16384
+
     def test_unknown_model_returns_404(self):
         resp = self.client.get("/v1/models/nonexistent")
         assert resp.status_code == 404
         assert "nonexistent" in resp.json()["detail"]
+
+
+class TestListModels:
+
+    client = TestClient(app)
+
+    def test_includes_context_window(self):
+        resp = self.client.get("/v1/models")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["data"][0]["context_window"] == 16384
 
 
 class TestMalformedToolCallsEndpoint:
