@@ -32,7 +32,7 @@ spec:
     spec:
       containers:
         - name: proteus
-          image: proteus:ae4afd5586fd
+          image: proteus:8ca5820cbd28
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
