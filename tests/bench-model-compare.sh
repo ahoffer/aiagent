@@ -12,7 +12,7 @@
 #   bash tests/bench-model-compare.sh qwen3:14b qwen3:8b # specific models
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/test-lib.sh"
+source "$SCRIPT_DIR/test.env"
 
 # ---- Section 1: Preamble ----
 

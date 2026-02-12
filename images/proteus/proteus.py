@@ -339,6 +339,18 @@ async def list_models():
     }
 
 
+@app.get("/v1/models/{model_id}")
+async def retrieve_model(model_id: str):
+    if model_id == "proteus":
+        return {
+            "id": "proteus",
+            "object": "model",
+            "created": 0,
+            "owned_by": "local",
+        }
+    raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
+
+
 @app.post("/v1/chat/completions")
 async def openai_chat_completions(request: OpenAIChatRequest):
     if not request.messages:

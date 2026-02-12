@@ -10,7 +10,7 @@
 #   ./bench-ollama.sh | column -ts $'\t'      # pretty-print columns
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/../defaults.sh"
+source "$SCRIPT_DIR/test.env"
 
 MODEL="${MODEL:-devstral:latest}"
 TIMEOUT="${TIMEOUT:-120}"

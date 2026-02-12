@@ -5,7 +5,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/../defaults.sh"
+source "$SCRIPT_DIR/../config.env"
 
 if [[ "$AGENT_URL" == *"ollama"* ]] || [[ "$AGENT_URL" == *":11434"* ]]; then
     echo "Error: AGENT_URL must point to Proteus, not Ollama: $AGENT_URL"

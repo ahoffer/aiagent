@@ -6,7 +6,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/test-lib.sh"
+source "$SCRIPT_DIR/test.env"
 
 print_header "Proteus Web Search Smoke Test"
 

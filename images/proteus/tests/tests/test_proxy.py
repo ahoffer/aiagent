@@ -32,7 +32,9 @@ from proteus import (
     OpenAIToolCall,
     OpenAIFunctionCall,
     OpenAIChatRequest,
+    app,
 )
+from fastapi.testclient import TestClient
 
 
 class TestMsgToDict:
@@ -135,3 +137,21 @@ class TestBuildOllamaOptions:
         req = OpenAIChatRequest()
         opts = _build_ollama_options(req)
         assert opts == {}
+
+
+class TestRetrieveModel:
+
+    client = TestClient(app)
+
+    def test_returns_proteus_model(self):
+        resp = self.client.get("/v1/models/proteus")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["id"] == "proteus"
+        assert body["object"] == "model"
+        assert body["owned_by"] == "local"
+
+    def test_unknown_model_returns_404(self):
+        resp = self.client.get("/v1/models/nonexistent")
+        assert resp.status_code == 404
+        assert "nonexistent" in resp.json()["detail"]

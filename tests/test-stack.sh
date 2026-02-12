@@ -4,7 +4,7 @@
 # Exit codes: 0 if all checks pass, 1 if any check fails.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/test-lib.sh"
+source "$SCRIPT_DIR/test.env"
 
 MODEL="${MODEL:-devstral:latest}"
 

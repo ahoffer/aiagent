@@ -15,7 +15,7 @@ Four services in the `aiforge` namespace.
 | Ollama | GPU model serving | ollama:11434 | cluster-internal |
 | SearXNG | Web search aggregation | searxng:8080 | :31080 |
 | Qdrant | Vector embeddings for RAG | qdrant:6333 | :31333 |
-| Proteus | LangGraph agent with native tool calling | proteus:8000 | :31400 |
+| Proteus | LangGraph agent and transparent Ollama proxy | proteus:8000 | :31400 |
 
 ## Quick Start
 
@@ -31,8 +31,8 @@ Verify with `./tests/test-stack.sh` and `./tests/test-services.sh`.
 
 | Frontend | Description |
 |----------|-------------|
-| `goose.sh` | Terminal coding agent with MCP tool calling (web search, files, git, shell) |
-| `opencode.sh` | Terminal coding assistant with MCP tool calling and TUI |
+| `goose.sh` | Terminal coding agent with MCP tools (web search, qdrant, files, git, shell) |
+| `opencode.sh` | Terminal coding assistant with MCP tools and TUI (web search, qdrant, files, git, shell) |
 
 Routing contract: `client -> proteus -> ollama`. Clients should never target Ollama directly.
 
@@ -40,46 +40,28 @@ Local models sometimes misinterpret intent. Use explicit phrasing like "analyze 
 
 ## Proteus
 
-FastAPI app in `images/proteus/`. All endpoints run through a single two-node LangGraph workflow that calls Ollama with native tool calling and executes `web_search` server-side via SearXNG. The orchestrator node calls the model, and the tools node dispatches tool calls and loops back until the model produces a final answer.
+FastAPI app in `images/proteus/` with two modes. The `/chat` and `/chat/stream` endpoints run a LangGraph workflow that calls Ollama with native tool calling and executes `web_search` server-side via SearXNG. The orchestrator node calls the model, and the tools node dispatches tool calls and loops back until the model produces a final answer. The `/v1/chat/completions` and `/v1/embeddings` endpoints are transparent proxies to Ollama, preserving tool_calls in the response so clients like opencode and goose can execute tools client-side via MCP.
 
 Endpoint Surface (Native + OpenAI Compatibility):
 
-| Surface | Method | Endpoint | Implemented | Purpose / Notes |
-|---------|--------|----------|-------------|-----------------|
-| Native | POST | `/chat` | YES | Native chat with sources via LangGraph workflow. |
-| Native | POST | `/chat/stream` | YES | SSE streaming with node progress events. |
-| Native | GET | `/health` | YES | Dependency health check. |
-| Native | GET | `/docs` | YES | FastAPI OpenAPI docs UI. |
-| OpenAI-compatible | POST | `/v1/chat/completions` | YES | OpenAI-style chat proxy (streaming + non-streaming). |
-| OpenAI-compatible | POST | `/v1/embeddings` | YES | OpenAI-style embeddings proxy. |
-| OpenAI-compatible | GET | `/v1/models` | YES | Model list for client discovery. |
-| OpenAI main | POST | `/v1/responses` | NO | Not currently implemented. |
-| OpenAI main | GET | `/v1/responses/{response_id}` | NO | Not currently implemented. |
-| OpenAI main | DELETE | `/v1/responses/{response_id}` | NO | Not currently implemented. |
-| OpenAI main | POST | `/v1/images/generations` | NO | Not currently implemented. |
-| OpenAI main | POST | `/v1/images/edits` | NO | Not currently implemented. |
-| OpenAI main | POST | `/v1/audio/transcriptions` | NO | Not currently implemented. |
-| OpenAI main | POST | `/v1/audio/translations` | NO | Not currently implemented. |
-| OpenAI main | POST | `/v1/audio/speech` | NO | Not currently implemented. |
-| OpenAI main | POST | `/v1/moderations` | NO | Not currently implemented. |
-| OpenAI main | GET | `/v1/models/{model}` | NO | Not currently implemented. |
-| OpenAI main | POST | `/v1/files` | NO | Not currently implemented. |
-| OpenAI main | GET | `/v1/files` | NO | Not currently implemented. |
-| OpenAI main | GET | `/v1/files/{file_id}` | NO | Not currently implemented. |
-| OpenAI main | DELETE | `/v1/files/{file_id}` | NO | Not currently implemented. |
-| OpenAI main | POST | `/v1/uploads` | NO | Not currently implemented. |
-| OpenAI main | POST | `/v1/batches` | NO | Not currently implemented. |
-| OpenAI main | POST | `/v1/fine_tuning/jobs` | NO | Not currently implemented. |
-| OpenAI main | POST | `/v1/vector_stores` | NO | Not currently implemented. |
-| OpenAI main | POST | `/v1/realtime` | NO | Not currently implemented. |
+| Surface | Method | Endpoint | Purpose / Notes |
+|---------|--------|----------|-----------------|
+| Native | POST | `/chat` | Server-side agent with tool execution via LangGraph. |
+| Native | POST | `/chat/stream` | SSE streaming with node progress events. |
+| Native | GET | `/health` | Dependency health check for Ollama and SearXNG. |
+| Native | GET | `/health/live` | Kubernetes liveness probe. |
+| Native | GET | `/health/ready` | Kubernetes readiness probe. |
+| Native | GET | `/docs` | FastAPI OpenAPI docs UI. |
+| OpenAI-compatible | POST | `/v1/chat/completions` | Transparent proxy to Ollama preserving tool_calls. |
+| OpenAI-compatible | POST | `/v1/embeddings` | Embedding proxy to Ollama for MCP servers. |
+| OpenAI-compatible | GET | `/v1/models` | Model list for client discovery. |
+| OpenAI-compatible | GET | `/v1/models/{model_id}` | Single model retrieval for SDK validation. |
 
-Build: `cd images/proteus && ./build.sh` then `kubectl apply -f k8s/`
-
-TODO: extend Qdrant integration beyond tool-based retrieval by adding ingestion pipelines and thread-aware retrieval memory in the LangGraph loop.
+TODO: add thread-aware retrieval memory in the LangGraph loop. Ingestion is available via the `qdrant_index` MCP tool, but the server-side agent does not yet use conversation history for retrieval.
 
 ## Configuration
 
-Launcher scripts source `defaults.sh`. Override any variable at launch.
+Launcher scripts source `config.env`. Override any variable at launch. Test scripts source `tests/test.env` for test-specific defaults.
 
 Client config files generated by launcher scripts:
 - Goose: `~/.config/goose/config.yaml` and `~/.config/goose/custom_providers/proteus.json`
@@ -87,18 +69,22 @@ Client config files generated by launcher scripts:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| AGENT_MODEL | devstral:latest-agent | Tuned alias with concise output |
+| AGENT_BASE_MODEL | devstral:latest | Base model pulled from Ollama registry |
+| AGENT_MODEL | ${AGENT_BASE_MODEL}-agent | Tuned alias with baked-in verbosity controls |
 | AGENT_URL | http://bigfish:31400 | Proteus proxy URL |
+| SEARXNG_URL | http://bigfish:31080 | SearXNG search API URL |
+| QDRANT_URL | http://bigfish:31333 | Qdrant vector store URL |
+| EMBEDDING_MODEL | nomic-embed-text | Model used for embeddings |
 
-Cluster-side settings live in ConfigMaps in `proteus.yaml`.
+Model tuning parameters (temperature, top_p, max_tokens, repeat_penalty) live in the k8s ConfigMaps in `proteus.yaml` and are baked into the Ollama model alias at deploy time.
 
 ## Testing
 
 - `test-stack.sh` - health, inference, tool calling, token speed
 - `test-services.sh` - Qdrant CRUD, SearXNG, embeddings
 - `test-agent.sh` - agent API including chat, streaming, and OpenAI-compatible endpoints
-- `test-proxy-web-search-smoke.sh` - verifies server-side `web_search` executes for recency prompts on `/v1/chat/completions`
-- `test-tool-calling.py` - 12 prompts across single-tool, no-tool, multi-tool categories
+- `test-proxy-web-search-smoke.sh` - verifies server-side `web_search` executes for recency prompts on `/chat`
+- `test-tool-calling.py` - 12 prompts across single-tool, no-tool, multi-tool categories (targets Ollama directly, not Proteus)
 - `bench-ollama.sh` - generation speed, prompt eval, time to first token, tool call latency
 - `images/proteus/tests/` - unit tests (pytest)
 

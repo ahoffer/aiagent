@@ -59,7 +59,7 @@ class OllamaClient:
 
         Args:
             prompt: The user prompt
-            model: Model name, defaults to INTERPRETER_MODEL env var
+            model: Model name, defaults to AGENT_MODEL env var
             system: Optional system prompt
             stream: If True, yields chunks instead of returning full response
             options: Ollama options like num_predict, temperature, etc.
