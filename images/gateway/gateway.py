@@ -22,24 +22,18 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from langfuse import Langfuse
 from pydantic import BaseModel
 import uvicorn
 
+from config import OLLAMA_URL, AGENT_MODEL, AGENT_NUM_CTX, EMBEDDING_MODEL, LOG_LANGGRAPH_OUTPUT
 from graph import agent_graph
 from clients import OllamaClient, SearxngClient
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434").rstrip("/")
-AGENT_MODEL = os.getenv("AGENT_MODEL", "devstral:latest-agent")
-# Feb 2025: Ollama defaults to 4096 context tokens. Injected into every request
-# to prevent silent truncation of tool-heavy prompts. See ollama/ollama#5356.
-AGENT_NUM_CTX = int(os.getenv("AGENT_NUM_CTX", "0"))
-
 # Sentinel for the sync-to-async queue bridge in chat_stream
 _SENTINEL = object()
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
 PROXY_TIMEOUT = 300.0
 # Start trimming when estimated tokens exceed this fraction of the context window
 CONTEXT_TRIM_THRESHOLD = 0.75
@@ -56,8 +50,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger("gateway")
-
-LOG_LANGGRAPH_OUTPUT = os.getenv("LOG_LANGGRAPH_OUTPUT", "true").lower() in ("1", "true")
 
 
 # ----------------------------
@@ -264,6 +256,39 @@ def _build_ollama_options(request) -> dict:
     if request.top_p is not None:
         opts["top_p"] = request.top_p
     return opts
+
+
+def _valid_tool_names(tools: list[dict] | None) -> set[str]:
+    """Extract the set of tool names the client declared in this request."""
+    if not tools:
+        return set()
+    names = set()
+    for t in tools:
+        fn = (t or {}).get("function", {}) or {}
+        name = fn.get("name", "")
+        if name:
+            names.add(name)
+    return names
+
+
+def _filter_hallucinated_tools(tool_calls: list[dict], valid_names: set[str],
+                                model: str) -> list[dict]:
+    """Reject tool_calls with names the client never offered.
+
+    Catches the common failure mode where a model's pretraining priors
+    overwhelm the injected schemas and it invents plausible-looking names.
+    """
+    if not valid_names or not tool_calls:
+        return tool_calls
+    kept = []
+    for tc in tool_calls:
+        fn = tc.get("function", {})
+        name = fn.get("name", "")
+        if name in valid_names:
+            kept.append(tc)
+        else:
+            log.warning("proxy filtered hallucinated tool_call name=%r model=%s", name, model)
+    return kept
 
 
 def _trace_request(trace_id: str, model: str, messages: list[dict],
@@ -527,27 +552,26 @@ async def retrieve_model(model_id: str):
 
 
 @app.post("/v1/chat/completions")
-async def openai_chat_completions(request: OpenAIChatRequest):
+async def openai_chat_completions(request: OpenAIChatRequest,
+                                  x_trace_id: str | None = Header(None)):
     if not request.messages:
         raise HTTPException(status_code=400, detail="No messages provided")
 
+    trace_id = x_trace_id or f"trace_{uuid4().hex[:8]}"
     tools_count = len(request.tools) if request.tools else 0
-    log.info("POST /v1/chat/completions messages=%d tools=%d stream=%s",
-             len(request.messages), tools_count, request.stream)
+    log.info("POST /v1/chat/completions trace=%s messages=%d tools=%d stream=%s",
+             trace_id, len(request.messages), tools_count, request.stream)
 
     if request.stream:
-        return await _openai_streaming(request)
+        return await _openai_streaming(request, trace_id)
 
-    return await _openai_non_streaming(request)
+    return await _openai_non_streaming(request, trace_id)
 
 
-async def _openai_non_streaming(request: OpenAIChatRequest):
-    # Validate and convert messages before acquiring the HTTP client so
-    # malformed input fails fast with 400 rather than touching resources.
+async def _openai_non_streaming(request: OpenAIChatRequest, trace_id: str):
     messages = [_msg_to_dict(m) for m in request.messages]
     ollama_messages = _openai_messages_to_ollama(messages)
 
-    # Trim old tool results when approaching the context window ceiling
     if AGENT_NUM_CTX:
         trim_budget = int(AGENT_NUM_CTX * CONTEXT_TRIM_THRESHOLD)
         ollama_messages = _trim_context(ollama_messages, trim_budget)
@@ -556,8 +580,9 @@ async def _openai_non_streaming(request: OpenAIChatRequest):
     created = int(time.time())
     http: httpx.AsyncClient = app.state.http
     model = AGENT_MODEL if request.model in ("gateway", None) else request.model
+    valid_names = _valid_tool_names(request.tools)
     tools_count = len(request.tools) if request.tools else 0
-    trace = _trace_request(completion_id, model, ollama_messages, tools_count, stream=False)
+    trace = _trace_request(trace_id, model, ollama_messages, tools_count, stream=False)
 
     ollama_payload = {
         "model": model,
@@ -595,6 +620,10 @@ async def _openai_non_streaming(request: OpenAIChatRequest):
     content = ollama_msg.get("content", "") or ""
     tool_calls = ollama_msg.get("tool_calls")
 
+    # Models without tool calling training confabulate names from pretraining
+    if tool_calls:
+        tool_calls = _filter_hallucinated_tools(tool_calls, valid_names, model)
+
     openai_msg = {"role": "assistant", "content": content}
     finish = "stop"
     if tool_calls:
@@ -614,13 +643,10 @@ async def _openai_non_streaming(request: OpenAIChatRequest):
     }
 
 
-async def _openai_streaming(request: OpenAIChatRequest):
-    # Validate and convert messages before acquiring the HTTP client so
-    # malformed input fails fast with 400 rather than touching resources.
+async def _openai_streaming(request: OpenAIChatRequest, trace_id: str):
     messages = [_msg_to_dict(m) for m in request.messages]
     ollama_messages = _openai_messages_to_ollama(messages)
 
-    # Trim old tool results when approaching the context window ceiling
     if AGENT_NUM_CTX:
         trim_budget = int(AGENT_NUM_CTX * CONTEXT_TRIM_THRESHOLD)
         ollama_messages = _trim_context(ollama_messages, trim_budget)
@@ -629,6 +655,7 @@ async def _openai_streaming(request: OpenAIChatRequest):
     created = int(time.time())
     http: httpx.AsyncClient = app.state.http
     model = AGENT_MODEL if request.model in ("gateway", None) else request.model
+    valid_names = _valid_tool_names(request.tools)
 
     ollama_payload = {
         "model": model,
@@ -646,6 +673,10 @@ async def _openai_streaming(request: OpenAIChatRequest):
     model_label = request.model or "gateway"
 
     async def generate():
+        # Ollama may send tool_calls in a pre-done chunk. Accumulate them
+        # so they survive to the done sentinel where we emit them to the client.
+        accumulated_tool_calls = []
+
         try:
             async with http.stream("POST", f"{OLLAMA_URL}/api/chat", json=ollama_payload) as resp:
                 if resp.status_code != 200:
@@ -666,6 +697,11 @@ async def _openai_streaming(request: OpenAIChatRequest):
                     content = ollama_msg.get("content", "")
                     is_done = data.get("done", False)
 
+                    # Capture tool_calls from any chunk, not just the done sentinel
+                    chunk_tool_calls = ollama_msg.get("tool_calls")
+                    if chunk_tool_calls:
+                        accumulated_tool_calls.extend(chunk_tool_calls)
+
                     if content:
                         chunk = {
                             "id": completion_id,
@@ -677,7 +713,10 @@ async def _openai_streaming(request: OpenAIChatRequest):
                         yield f"data: {json.dumps(chunk)}\n\n"
 
                     if is_done:
-                        tool_calls = ollama_msg.get("tool_calls")
+                        tool_calls = accumulated_tool_calls or None
+                        if tool_calls:
+                            tool_calls = _filter_hallucinated_tools(
+                                tool_calls, valid_names, model)
                         _log_tool_call_outcome(
                             tool_calls, tools_offered=bool(request.tools), stream=True)
                         if tool_calls:
@@ -725,7 +764,7 @@ async def _openai_streaming(request: OpenAIChatRequest):
 
 class EmbeddingRequest(BaseModel):
     model_config = {"extra": "allow"}
-    model: str = "nomic-embed-text"
+    model: str = EMBEDDING_MODEL
     input: str | list[str] = ""
 
 

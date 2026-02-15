@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: testrunner
+  namespace: aiforge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: testrunner
+  template:
+    metadata:
+      labels:
+        app: testrunner
+    spec:
+      containers:
+        - name: testrunner
+          image: testrunner:ddf8b90bcb06
+          command: ["sleep", "infinity"]
+          envFrom:
+            - configMapRef:
+                name: gateway-config
+          env:
+            - name: AGENT_URL
+              value: "http://gateway:8000"
+            - name: AGENT_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: ollama-config
+                  key: AGENT_MODEL
+            - name: AGENT_NUM_CTX
+              valueFrom:
+                configMapKeyRef:
+                  name: ollama-config
+                  key: AGENT_NUM_CTX
+            - name: EMBEDDING_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: ollama-config
+                  key: EMBEDDING_MODEL

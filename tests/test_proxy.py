@@ -598,3 +598,423 @@ class TestTrimContext:
         ]
         result = _trim_context(msgs, 0)
         assert result is not None
+
+
+# -- Helpers for multi-turn test data --
+
+def _make_multi_turn_conversation(turns, tool_result_chars=200):
+    """Build a realistic OpenAI-format conversation with tool calling turns.
+
+    Each turn consists of a user message, an assistant message with a
+    tool_call, and a tool result message. The tool result content is
+    padded to tool_result_chars so callers can control the token budget
+    pressure.
+    """
+    msgs = [{"role": "system", "content": "You are a coding assistant."}]
+    for i in range(turns):
+        msgs.append({"role": "user", "content": f"Turn {i} question about the project"})
+        call_id = f"call_{i:04d}"
+        msgs.append({
+            "role": "assistant",
+            "tool_calls": [{
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": f"/src/file_{i}.py"}),
+                },
+            }],
+        })
+        msgs.append({
+            "role": "tool",
+            "content": f"# file_{i}.py\n" + "x" * tool_result_chars,
+            "tool_call_id": call_id,
+            "name": "read_file",
+        })
+    msgs.append({"role": "user", "content": "Now summarize everything."})
+    return msgs
+
+
+class TestTrimContextIntegrity:
+    """Verify trimming preserves tool message structure required by Ollama."""
+
+    def test_trimmed_tool_messages_retain_ids(self):
+        """Every trimmed tool message must keep tool_call_id and name."""
+        msgs = _make_multi_turn_conversation(turns=10, tool_result_chars=600)
+        budget = _estimate_tokens(msgs) // 3
+        result = _trim_context(msgs, budget)
+
+        for msg in result:
+            if msg.get("role") != "tool":
+                continue
+            assert "tool_call_id" in msg, "trimmed tool message lost tool_call_id"
+            assert msg["tool_call_id"], "tool_call_id is empty"
+            assert "name" in msg, "trimmed tool message lost name"
+            assert msg["name"], "name is empty"
+
+    def test_full_pipeline_round_trip(self):
+        """Messages survive _msg_to_dict, _openai_messages_to_ollama, _trim_context."""
+        openai_msgs = [
+            OpenAIMessage(role="user", content="Read the config file"),
+            OpenAIMessage(
+                role="assistant",
+                tool_calls=[OpenAIToolCall(
+                    id="call_rt",
+                    type="function",
+                    function=OpenAIFunctionCall(
+                        name="read_file",
+                        arguments='{"path": "/etc/config.yaml"}',
+                    ),
+                )],
+            ),
+            OpenAIMessage(role="tool", content="key: value\n" * 100,
+                          tool_call_id="call_rt", name="read_file"),
+            OpenAIMessage(role="user", content="What does it say?"),
+        ]
+
+        dicts = [_msg_to_dict(m) for m in openai_msgs]
+        ollama = _openai_messages_to_ollama(dicts)
+        trimmed = _trim_context(ollama, max_tokens=50)
+
+        for msg in trimmed:
+            if msg.get("tool_calls"):
+                for tc in msg["tool_calls"]:
+                    args = tc["function"]["arguments"]
+                    assert isinstance(args, dict), "arguments should be dict for Ollama"
+            if msg.get("role") == "tool":
+                assert "tool_call_id" in msg
+
+    def test_assistant_tool_calls_never_orphaned(self):
+        """When a tool result is trimmed, its assistant message must remain."""
+        msgs = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "question"},
+            {"role": "assistant", "tool_calls": [{
+                "function": {"name": "read_file", "arguments": "{}"},
+            }]},
+            {"role": "tool", "content": "x" * 2000,
+             "tool_call_id": "call_0", "name": "read_file"},
+            {"role": "user", "content": "followup"},
+            {"role": "assistant", "content": "here is the answer"},
+            {"role": "user", "content": "thanks"},
+        ]
+        result = _trim_context(msgs, max_tokens=30)
+
+        trimmed_tools = [m for m in result if m.get("content") == "[trimmed]"]
+        if trimmed_tools:
+            assistant_with_calls = [
+                m for m in result
+                if m.get("role") == "assistant" and m.get("tool_calls")
+            ]
+            assert len(assistant_with_calls) >= 1, \
+                "assistant message with tool_calls was dropped but tool result remains"
+
+    def test_multiple_tool_calls_per_turn(self):
+        """Three tool_calls in one assistant message, three results.
+        Older turn trimmed, newer turn intact."""
+        msgs = [{"role": "system", "content": "sys"}]
+
+        # Old turn with 3 tool calls
+        msgs.append({"role": "user", "content": "old question"})
+        old_calls = []
+        for j in range(3):
+            old_calls.append({
+                "id": f"call_old_{j}",
+                "type": "function",
+                "function": {"name": f"tool_{j}", "arguments": "{}"},
+            })
+        msgs.append({"role": "assistant", "tool_calls": old_calls})
+        for j in range(3):
+            msgs.append({
+                "role": "tool",
+                "content": "old_data_" + "x" * 800,
+                "tool_call_id": f"call_old_{j}",
+                "name": f"tool_{j}",
+            })
+
+        # Recent turn with 3 tool calls
+        msgs.append({"role": "user", "content": "new question"})
+        new_calls = []
+        for j in range(3):
+            new_calls.append({
+                "id": f"call_new_{j}",
+                "type": "function",
+                "function": {"name": f"tool_{j}", "arguments": "{}"},
+            })
+        msgs.append({"role": "assistant", "tool_calls": new_calls})
+        for j in range(3):
+            msgs.append({
+                "role": "tool",
+                "content": "new_data_" + "y" * 800,
+                "tool_call_id": f"call_new_{j}",
+                "name": f"tool_{j}",
+            })
+        msgs.append({"role": "user", "content": "summarize"})
+
+        # Budget high enough that trimming the 3 old results suffices,
+        # but low enough that trimming must fire
+        old_tool_tokens = sum(
+            _estimate_tokens([m]) for m in msgs
+            if m.get("tool_call_id", "").startswith("call_old_")
+        )
+        budget = _estimate_tokens(msgs) - old_tool_tokens + 10
+        result = _trim_context(msgs, budget)
+
+        old_trimmed = [
+            m for m in result
+            if m.get("role") == "tool"
+            and m.get("tool_call_id", "").startswith("call_old_")
+            and m.get("content") == "[trimmed]"
+        ]
+        new_intact = [
+            m for m in result
+            if m.get("role") == "tool"
+            and m.get("tool_call_id", "").startswith("call_new_")
+            and m.get("content") != "[trimmed]"
+        ]
+        assert len(old_trimmed) == 3, f"expected 3 old trimmed, got {len(old_trimmed)}"
+        assert len(new_intact) == 3, f"expected 3 new intact, got {len(new_intact)}"
+
+    def test_realistic_payload_sizes(self):
+        """Forgetools-sized payloads trigger trimming within the 16K budget."""
+        msgs = [{"role": "system", "content": "You are a coding assistant."}]
+        for i in range(20):
+            msgs.append({"role": "user", "content": f"Show me file {i}"})
+            call_id = f"call_real_{i}"
+            msgs.append({
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({"path": f"/src/mod{i}.py"})},
+                }],
+            })
+            # Alternate between file reads (4000 chars) and dir listings (2000 chars)
+            size = 4000 if i % 2 == 0 else 2000
+            msgs.append({
+                "role": "tool",
+                "content": "x" * size,
+                "tool_call_id": call_id,
+                "name": "read_file",
+            })
+        msgs.append({"role": "user", "content": "final question"})
+
+        budget = int(16384 * 0.75)
+        before = _estimate_tokens(msgs)
+        assert before > budget, "test setup: messages must exceed budget"
+
+        result = _trim_context(msgs, budget)
+        after = _estimate_tokens(result)
+        assert after < budget, f"trimming failed: {after} >= {budget}"
+
+
+class TestProxyMultiTurn:
+    """Verify multi-turn tool conversations flow correctly through the proxy endpoint."""
+
+    def _ollama_text_response(self, content="Here is the answer."):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "message": {"role": "assistant", "content": content},
+            "done": True,
+        }
+        return mock_resp
+
+    def _ollama_tool_response(self, tool_calls):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": tool_calls,
+            },
+            "done": True,
+        }
+        return mock_resp
+
+    def _forgetools_schemas(self):
+        """OpenAI-format schemas matching the 6 forgetools."""
+        return [
+            {"type": "function", "function": {
+                "name": "read_file",
+                "description": "Read a file and return its contents with line numbers",
+                "parameters": {"type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"]},
+            }},
+            {"type": "function", "function": {
+                "name": "write_file",
+                "description": "Write content to a file",
+                "parameters": {"type": "object",
+                    "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+                    "required": ["path", "content"]},
+            }},
+            {"type": "function", "function": {
+                "name": "list_directory",
+                "description": "List files and directories at the given path",
+                "parameters": {"type": "object",
+                    "properties": {"path": {"type": "string"}, "recursive": {"type": "boolean"}},
+                    "required": ["path"]},
+            }},
+            {"type": "function", "function": {
+                "name": "search_files",
+                "description": "Search file contents for a regex pattern",
+                "parameters": {"type": "object",
+                    "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}},
+                    "required": ["pattern"]},
+            }},
+            {"type": "function", "function": {
+                "name": "run_command",
+                "description": "Run a shell command and return output",
+                "parameters": {"type": "object",
+                    "properties": {"command": {"type": "string"}},
+                    "required": ["command"]},
+            }},
+            {"type": "function", "function": {
+                "name": "web_search",
+                "description": "Search the web for current information",
+                "parameters": {"type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"]},
+            }},
+        ]
+
+    @pytest.mark.anyio
+    async def test_turn2_tool_results_forwarded(self):
+        """Tool results in turn 2 reach Ollama with arguments as dicts."""
+        mock_http = AsyncMock()
+        mock_http.post.return_value = self._ollama_text_response()
+
+        messages = [
+            {"role": "user", "content": "Read /etc/hostname"},
+            {
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": "call_abc",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path": "/etc/hostname"}'},
+                }],
+            },
+            {"role": "tool", "content": "gateway-node\n",
+             "tool_call_id": "call_abc", "name": "read_file"},
+        ]
+
+        with TestClient(app) as client:
+            app.state.http = mock_http
+            resp = client.post("/v1/chat/completions", json={
+                "model": "gateway",
+                "messages": messages,
+                "tools": [self._forgetools_schemas()[0]],
+            })
+
+        assert resp.status_code == 200
+        payload = mock_http.post.call_args[1]["json"]
+        ollama_msgs = payload["messages"]
+
+        # Arguments converted from JSON string to dict for Ollama
+        assistant_msg = [m for m in ollama_msgs if m.get("tool_calls")][0]
+        args = assistant_msg["tool_calls"][0]["function"]["arguments"]
+        assert isinstance(args, dict), f"expected dict, got {type(args)}"
+
+        # tool_call_id preserved on tool result
+        tool_msg = [m for m in ollama_msgs if m.get("role") == "tool"][0]
+        assert tool_msg["tool_call_id"] == "call_abc"
+
+    @pytest.mark.anyio
+    async def test_goose_exact_message_format(self):
+        """Goose sends all 6 forgetools schemas. Gateway forwards valid messages."""
+        mock_http = AsyncMock()
+        mock_http.post.return_value = self._ollama_tool_response([{
+            "function": {"name": "read_file", "arguments": {"path": "/src/main.py"}},
+        }])
+
+        with TestClient(app) as client:
+            app.state.http = mock_http
+            resp = client.post("/v1/chat/completions", json={
+                "model": "gateway",
+                "messages": [{"role": "user", "content": "Read the main source file"}],
+                "tools": self._forgetools_schemas(),
+            })
+
+        assert resp.status_code == 200
+        payload = mock_http.post.call_args[1]["json"]
+        assert len(payload["tools"]) == 6
+        assert payload["messages"][0]["role"] == "user"
+
+    @pytest.mark.anyio
+    async def test_tool_calls_response_converted(self):
+        """Ollama dict arguments become JSON strings in the OpenAI response."""
+        mock_http = AsyncMock()
+        mock_http.post.return_value = self._ollama_tool_response([{
+            "function": {
+                "name": "list_directory",
+                "arguments": {"path": "/src", "recursive": True},
+            },
+        }])
+
+        with TestClient(app) as client:
+            app.state.http = mock_http
+            resp = client.post("/v1/chat/completions", json={
+                "model": "gateway",
+                "messages": [{"role": "user", "content": "List source files"}],
+                "tools": self._forgetools_schemas(),
+            })
+
+        assert resp.status_code == 200
+        body = resp.json()
+        choice = body["choices"][0]
+        assert choice["finish_reason"] == "tool_calls"
+        tc = choice["message"]["tool_calls"][0]
+        assert isinstance(tc["function"]["arguments"], str)
+        parsed = json.loads(tc["function"]["arguments"])
+        assert parsed["path"] == "/src"
+
+    @pytest.mark.anyio
+    async def test_streaming_multi_turn(self):
+        """Streaming turn 2 with tool results produces tool_calls chunk and DONE."""
+        lines = [
+            '{"message": {"role": "assistant", "content": "", '
+            '"tool_calls": [{"function": {"name": "read_file", '
+            '"arguments": {"path": "/tmp/x"}}}]}, "done": true}',
+        ]
+
+        async def mock_aiter_lines():
+            for line in lines:
+                yield line
+
+        mock_resp = AsyncMock()
+        mock_resp.status_code = 200
+        mock_resp.aiter_lines = mock_aiter_lines
+
+        @asynccontextmanager
+        async def mock_stream(method, url, **kwargs):
+            yield mock_resp
+
+        messages = [
+            {"role": "user", "content": "Read /tmp/x"},
+            {
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": "call_s1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path": "/tmp/x"}'},
+                }],
+            },
+            {"role": "tool", "content": "file contents here",
+             "tool_call_id": "call_s1", "name": "read_file"},
+            {"role": "user", "content": "What does it say?"},
+        ]
+
+        with TestClient(app) as client:
+            app.state.http.stream = mock_stream
+            resp = client.post("/v1/chat/completions", json={
+                "model": "gateway",
+                "messages": messages,
+                "tools": [self._forgetools_schemas()[0]],
+                "stream": True,
+            })
+
+        assert resp.status_code == 200
+        assert "tool_calls" in resp.text
+        assert "data: [DONE]" in resp.text

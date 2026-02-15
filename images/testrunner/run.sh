@@ -27,11 +27,19 @@ run_integration() {
     echo ""
     echo "=== Agent Integration ==="
     /app/tests/test-agent.sh
+
+    echo ""
+    echo "=== Native Tools ==="
+    /app/tests/test-native-tools.sh
 }
 
 run_toolcalling() {
     echo "=== Tool Calling ==="
     python3 /app/tests/test-tool-calling.py
+
+    echo ""
+    echo "=== Goose Readiness ==="
+    python3 /app/tests/test-goose-readiness.py
 }
 
 run_bench() {

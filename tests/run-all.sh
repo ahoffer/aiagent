@@ -21,5 +21,9 @@ echo "=== Agent Integration ==="
 "$SCRIPT_DIR/test-agent.sh"
 
 echo ""
+echo "=== Native Tools ==="
+"$SCRIPT_DIR/test-native-tools.sh"
+
+echo ""
 echo "=== Web Search Smoke ==="
 "$SCRIPT_DIR/test-proxy-web-search-smoke.sh"

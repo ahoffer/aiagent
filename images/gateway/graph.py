@@ -24,15 +24,14 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.globals import set_debug
 
+from config import AGENT_MODEL, AGENT_NUM_CTX, LOG_LANGGRAPH_OUTPUT
 from clients import OllamaClient, QdrantClient, SearxngClient
 from tools import DEFAULT_TOOLS, execute_tool, merge_tools
 
 set_debug(os.getenv("LANGGRAPH_DEBUG", "").lower() in ("1", "true"))
 log = logging.getLogger(__name__)
-LOG_LANGGRAPH_OUTPUT = os.getenv("LOG_LANGGRAPH_OUTPUT", "true").lower() in ("1", "true")
 
 MAX_TOOL_ITERATIONS = int(os.getenv("MAX_TOOL_ITERATIONS", "5"))
-AGENT_NUM_CTX = int(os.getenv("AGENT_NUM_CTX", "0"))
 
 # Hostile search snippets can inject instructions into model context.
 # Cap total tool output to limit that surface.
@@ -122,7 +121,7 @@ def orchestrator_node(state: AgentState) -> dict:
         if user_message:
             messages.append({"role": "user", "content": user_message})
 
-    model = os.getenv("AGENT_MODEL", "devstral:latest-agent")
+    model = f"{AGENT_MODEL}-agent"
     tools = merge_tools(DEFAULT_TOOLS, state.get("tools"))
 
     ollama = OllamaClient()

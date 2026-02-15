@@ -1,10 +1,12 @@
 .goose/
 __pycache__/
+*.pyc
 .opencode/
 =*
 .serena/
 /.idea/
 /.venv/
+.claude/
 .pytest_cache/
 *.tar.gz
 uv.lock
@@ -12,3 +14,4 @@ gpt-oss/
 .playwright-mcp/
 .playwright_profile/
 gemini_conversations/
+.DS_Store

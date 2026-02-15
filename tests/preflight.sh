@@ -8,7 +8,7 @@ OLLAMA_URL="${OLLAMA_URL:-http://ollama:11434}"
 SEARXNG_URL="${SEARXNG_URL:-http://searxng:8080}"
 QDRANT_URL="${QDRANT_URL:-http://qdrant:6333}"
 AGENT_URL="${AGENT_URL:-http://gateway:8000}"
-AGENT_MODEL="${AGENT_MODEL:-qwen2.5-coder:14b}"
+AGENT_MODEL="${AGENT_MODEL:?AGENT_MODEL must be set by ConfigMap or config.env}"
 
 MAX_RETRIES="${PREFLIGHT_RETRIES:-3}"
 RETRY_DELAY="${PREFLIGHT_RETRY_DELAY:-5}"

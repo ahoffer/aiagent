@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """MCP tool server for the AIForge coding assistant.
 
-Provides six focused tools that replace the generic shell escape hatch.
-Devstral scores 20/20 on tool calling with 2 tools. Six tools with
-precise descriptions is well within its capability and far better
-than one shell tool that forces the model to compose commands.
+Six focused tools with a small schema surface so the agent model picks
+the right tool without composing commands.
 
-Launched by goose.sh via stdio transport. Tools execute locally on
-the workstation where the code lives.
+Future work: add a verified shell tool that translates natural language
+intent into candidate bash commands, validates each candidate against
+the LLM and web search for correctness and safety, iterates until
+confident, and reports failure with reasons if it cannot converge.
+
+Launched by goose.sh via stdio. Executes on the workstation, not in-cluster.
 """
 
 import os

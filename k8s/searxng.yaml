@@ -34,7 +34,7 @@ spec:
     spec:
       initContainers:
         - name: inject-secret
-          image: busybox:latest
+          image: busybox:1
           command: ["/bin/sh", "-c"]
           args:
             - |

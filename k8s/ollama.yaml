@@ -25,7 +25,7 @@ data:
   # Q4_0 KV cache quarters VRAM per token, fitting 16k context in ~1 GB.
   # Leaves headroom for the 14B model weights on a 16GB GPU.
   OLLAMA_KV_CACHE_TYPE: "q4_0"
-  AGENT_MODEL: "qwen2.5-coder:14b"
+  AGENT_MODEL: "qwen3:14b"
   EMBEDDING_MODEL: "nomic-embed-text"
   # LLM response tuning. Applied by creating a model alias at startup.
   AGENT_TEMPERATURE: "0.3"

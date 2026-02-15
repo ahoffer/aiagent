@@ -16,6 +16,7 @@ export GOOSE_PROVIDER="${GOOSE_PROVIDER:-gateway}"
 export GOOSE_MODEL="${GOOSE_MODEL:-gateway}"
 export GATEWAY_API_KEY="not-needed"
 export GOOSE_CLI_THEME="${GOOSE_CLI_THEME:-light}"
+export GOOSE_TELEMETRY_ENABLED=false
 # Show full tool parameters without truncation. Logs land in ~/.local/state/goose/logs/
 export GOOSE_DEBUG="${GOOSE_DEBUG:-1}"
 
@@ -40,7 +41,7 @@ cat > "$GOOSE_CONFIG_DIR/custom_providers/gateway.json" <<EOF
   "models": [
     {
       "name": "gateway",
-      "context_limit": 32768
+      "context_limit": 16384
     }
   ],
   "supports_streaming": true,
@@ -49,8 +50,7 @@ cat > "$GOOSE_CONFIG_DIR/custom_providers/gateway.json" <<EOF
 EOF
 
 # Generate config with MCP extensions.
-# Six curated tools replace the generic shell escape hatch. Devstral handles
-# focused schemas well. The forgetools server runs locally via stdio.
+# Six focused tools. forgetools runs via stdio.
 cat > "$GOOSE_CONFIG_DIR/config.yaml" <<EOF
 GOOSE_PROVIDER: gateway
 GOOSE_MODEL: ${GOOSE_MODEL}

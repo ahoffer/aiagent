@@ -8,11 +8,6 @@ data:
   OLLAMA_URL: "http://ollama:11434"
   SEARXNG_URL: "http://searxng:8080"
   QDRANT_URL: "http://qdrant:6333"
-  AGENT_MODEL: "devstral:latest-agent"
-  AGENT_MAX_TOKENS: "2048"
-  # Injected into every Ollama request to override the 4096 default.
-  # Matches Q4_0 KV cache budget in ollama.yaml.
-  AGENT_NUM_CTX: "32768"
   # Langfuse tracing
   LANGFUSE_HOST: "http://langfuse:3000"
   LANGFUSE_PUBLIC_KEY: "pk-lf-aiforge"
@@ -42,13 +37,36 @@ spec:
           type: Unconfined
       containers:
         - name: gateway
-          image: gateway:64c76e07fffe
+          image: gateway:734068d2426a
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
           envFrom:
             - configMapRef:
                 name: gateway-config
+          env:
+            # Model identity and tuning flow from ollama-config so there
+            # is a single source of truth for model name and context size.
+            - name: AGENT_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: ollama-config
+                  key: AGENT_MODEL
+            - name: AGENT_NUM_CTX
+              valueFrom:
+                configMapKeyRef:
+                  name: ollama-config
+                  key: AGENT_NUM_CTX
+            - name: AGENT_MAX_TOKENS
+              valueFrom:
+                configMapKeyRef:
+                  name: ollama-config
+                  key: AGENT_MAX_TOKENS
+            - name: EMBEDDING_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: ollama-config
+                  key: EMBEDDING_MODEL
           resources:
             requests:
               memory: 256Mi

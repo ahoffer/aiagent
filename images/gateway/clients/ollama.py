@@ -2,11 +2,12 @@
 
 import json
 import logging
-import os
 import time
 from typing import Any, Generator
 
 import requests
+
+from config import AGENT_MODEL, EMBEDDING_MODEL, OLLAMA_URL
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ class OllamaClient:
     """Client for Ollama API providing chat and embedding capabilities."""
 
     def __init__(self, base_url: str | None = None):
-        self.base_url = (base_url or os.getenv("OLLAMA_URL", "http://ollama:11434")).rstrip("/")
+        self.base_url = (base_url or OLLAMA_URL).rstrip("/")
 
     def generate(
         self,
@@ -67,7 +68,7 @@ class OllamaClient:
         Returns:
             Complete response string or generator of chunks
         """
-        model = model or os.getenv("AGENT_MODEL", "devstral:latest-agent")
+        model = model or AGENT_MODEL
 
         payload = {
             "model": model,
@@ -124,7 +125,7 @@ class OllamaClient:
             Full message dict (when tools provided), content string, or
             generator of chunks
         """
-        model = model or os.getenv("AGENT_MODEL", "devstral:latest-agent")
+        model = model or AGENT_MODEL
 
         payload = {
             "model": model,
@@ -173,7 +174,7 @@ class OllamaClient:
         Returns:
             List of embedding vectors
         """
-        model = model or os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
+        model = model or EMBEDDING_MODEL
 
         if isinstance(text, str):
             text = [text]
