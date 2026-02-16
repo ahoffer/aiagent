@@ -29,6 +29,7 @@ from pydantic import BaseModel
 import uvicorn
 
 from config import OLLAMA_URL, AGENT_MODEL, AGENT_NUM_CTX, EMBEDDING_MODEL, LOG_LANGGRAPH_OUTPUT
+from contentfilters import select_filter
 from graph import agent_graph
 from clients import OllamaClient, SearxngClient
 
@@ -553,7 +554,8 @@ async def retrieve_model(model_id: str):
 
 @app.post("/v1/chat/completions")
 async def openai_chat_completions(request: OpenAIChatRequest,
-                                  x_trace_id: str | None = Header(None)):
+                                  x_trace_id: str | None = Header(None),
+                                  user_agent: str | None = Header(None)):
     if not request.messages:
         raise HTTPException(status_code=400, detail="No messages provided")
 
@@ -562,13 +564,16 @@ async def openai_chat_completions(request: OpenAIChatRequest,
     log.info("POST /v1/chat/completions trace=%s messages=%d tools=%d stream=%s",
              trace_id, len(request.messages), tools_count, request.stream)
 
+    content_filter = select_filter(user_agent)
+
     if request.stream:
-        return await _openai_streaming(request, trace_id)
+        return await _openai_streaming(request, trace_id, content_filter)
 
-    return await _openai_non_streaming(request, trace_id)
+    return await _openai_non_streaming(request, trace_id, content_filter)
 
 
-async def _openai_non_streaming(request: OpenAIChatRequest, trace_id: str):
+async def _openai_non_streaming(request: OpenAIChatRequest, trace_id: str,
+                                content_filter):
     messages = [_msg_to_dict(m) for m in request.messages]
     ollama_messages = _openai_messages_to_ollama(messages)
 
@@ -617,7 +622,8 @@ async def _openai_non_streaming(request: OpenAIChatRequest, trace_id: str):
 
     body = resp.json()
     ollama_msg = body.get("message", {})
-    content = ollama_msg.get("content", "") or ""
+    raw_content = ollama_msg.get("content", "") or ""
+    content = content_filter.feed(raw_content) + content_filter.flush()
     tool_calls = ollama_msg.get("tool_calls")
 
     # Models without tool calling training confabulate names from pretraining
@@ -643,7 +649,8 @@ async def _openai_non_streaming(request: OpenAIChatRequest, trace_id: str):
     }
 
 
-async def _openai_streaming(request: OpenAIChatRequest, trace_id: str):
+async def _openai_streaming(request: OpenAIChatRequest, trace_id: str,
+                            content_filter):
     messages = [_msg_to_dict(m) for m in request.messages]
     ollama_messages = _openai_messages_to_ollama(messages)
 
@@ -676,6 +683,10 @@ async def _openai_streaming(request: OpenAIChatRequest, trace_id: str):
         # Ollama may send tool_calls in a pre-done chunk. Accumulate them
         # so they survive to the done sentinel where we emit them to the client.
         accumulated_tool_calls = []
+        # Goose and other OpenAI clients gate markdown rendering on seeing
+        # role: assistant in the first streamed delta. Without it, responses
+        # render as raw text with literal ** and ``` showing through.
+        sent_role = False
 
         try:
             async with http.stream("POST", f"{OLLAMA_URL}/api/chat", json=ollama_payload) as resp:
@@ -703,16 +714,37 @@ async def _openai_streaming(request: OpenAIChatRequest, trace_id: str):
                         accumulated_tool_calls.extend(chunk_tool_calls)
 
                     if content:
-                        chunk = {
-                            "id": completion_id,
-                            "object": "chat.completion.chunk",
-                            "created": created,
-                            "model": model_label,
-                            "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}],
-                        }
-                        yield f"data: {json.dumps(chunk)}\n\n"
+                        filtered = content_filter.feed(content)
+                        if filtered:
+                            delta = {"content": filtered}
+                            if not sent_role:
+                                delta["role"] = "assistant"
+                                sent_role = True
+                            chunk = {
+                                "id": completion_id,
+                                "object": "chat.completion.chunk",
+                                "created": created,
+                                "model": model_label,
+                                "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
+                            }
+                            yield f"data: {json.dumps(chunk)}\n\n"
 
                     if is_done:
+                        # Flush any remaining buffered content from the filter
+                        remainder = content_filter.flush()
+                        if remainder:
+                            delta = {"content": remainder}
+                            if not sent_role:
+                                delta["role"] = "assistant"
+                                sent_role = True
+                            flush_chunk = {
+                                "id": completion_id,
+                                "object": "chat.completion.chunk",
+                                "created": created,
+                                "model": model_label,
+                                "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
+                            }
+                            yield f"data: {json.dumps(flush_chunk)}\n\n"
                         tool_calls = accumulated_tool_calls or None
                         if tool_calls:
                             tool_calls = _filter_hallucinated_tools(

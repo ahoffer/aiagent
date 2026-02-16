@@ -9,8 +9,7 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
-# Set before graph import so module-level AGENT_NUM_CTX picks it up.
-os.environ.setdefault("AGENT_NUM_CTX", "16384")
+# conftest.py loads defaults from config.env before collection
 
 # Mock langgraph before importing graph.py
 _mock_langgraph = MagicMock()
@@ -162,7 +161,8 @@ def test_orchestrator_passes_num_ctx_options(mock_ollama_cls):
     orchestrator_node(state)
 
     call_kwargs = mock_client.chat.call_args
-    assert call_kwargs.kwargs["options"] == {"num_ctx": 16384}
+    from config import AGENT_NUM_CTX
+    assert call_kwargs.kwargs["options"] == {"num_ctx": AGENT_NUM_CTX}
 
 
 # -- Tools node tests --

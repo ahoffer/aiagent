@@ -20,10 +20,10 @@ data:
   OLLAMA_FLASH_ATTENTION: "1"
   OLLAMA_GPU_OVERHEAD: "33554432"
   OLLAMA_KEEP_ALIVE: "-1"
-  OLLAMA_NUM_PARALLEL: "2"
+  OLLAMA_NUM_PARALLEL: "1"
   OLLAMA_MAX_LOADED_MODELS: "1"
-  # Q4_0 KV cache quarters VRAM per token, fitting 16k context in ~1 GB.
-  # Leaves headroom for the 14B model weights on a 16GB GPU.
+  # Q4_0 KV cache at ~0.05 MiB per token. 32k context uses ~1.6 GB,
+  # well within the ~5.7 GB free after qwen3:14b model weights load.
   OLLAMA_KV_CACHE_TYPE: "q4_0"
   AGENT_MODEL: "qwen3:14b"
   EMBEDDING_MODEL: "nomic-embed-text"
@@ -32,8 +32,8 @@ data:
   AGENT_MAX_TOKENS: "2048"
   AGENT_REPEAT_PENALTY: "1.05"
   # Ollama defaults to 4096 context. Clients like Goose send large tool-heavy
-  # prompts that get silently truncated. 16k balances capacity with VRAM budget.
-  AGENT_NUM_CTX: "16384"
+  # prompts that get silently truncated. 32k fits comfortably with Q4_0 KV cache.
+  AGENT_NUM_CTX: "32768"
   AGENT_SYSTEM_PROMPT: "You are a coding assistant. Read relevant files before making changes. After editing, verify your changes compile or pass linting. Use web_search only when local context is insufficient, for example to check library versions or API changes beyond your training data. Be concise and direct. Avoid filler phrases."
 ---
 apiVersion: v1

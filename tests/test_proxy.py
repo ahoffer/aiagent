@@ -8,8 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-# Set before gateway import so module-level AGENT_NUM_CTX picks it up.
-os.environ.setdefault("AGENT_NUM_CTX", "16384")
+# conftest.py loads defaults from config.env before collection
 
 # Ensure we have real modules (not mocks from test_graph)
 if "clients" in sys.modules and isinstance(sys.modules["clients"], MagicMock):
@@ -41,6 +40,7 @@ from gateway import (
     OpenAIChatRequest,
     app,
 )
+from config import AGENT_NUM_CTX
 from fastapi.testclient import TestClient
 
 
@@ -167,12 +167,12 @@ class TestBuildOllamaOptions:
     def test_maps_parameters(self):
         req = OpenAIChatRequest(max_tokens=100, temperature=0.5, top_p=0.9)
         opts = _build_ollama_options(req)
-        assert opts == {"num_ctx": 16384, "num_predict": 100, "temperature": 0.5, "top_p": 0.9}
+        assert opts == {"num_ctx": AGENT_NUM_CTX, "num_predict": 100, "temperature": 0.5, "top_p": 0.9}
 
     def test_includes_num_ctx_even_with_no_other_params(self):
         req = OpenAIChatRequest()
         opts = _build_ollama_options(req)
-        assert opts == {"num_ctx": 16384}
+        assert opts == {"num_ctx": AGENT_NUM_CTX}
 
 
 class TestRetrieveModel:
@@ -190,7 +190,7 @@ class TestRetrieveModel:
     def test_includes_context_window(self):
         resp = self.client.get("/v1/models/gateway")
         assert resp.status_code == 200
-        assert resp.json()["context_window"] == 16384
+        assert resp.json()["context_window"] == AGENT_NUM_CTX
 
     def test_unknown_model_returns_404(self):
         resp = self.client.get("/v1/models/nonexistent")
@@ -206,7 +206,7 @@ class TestListModels:
         resp = self.client.get("/v1/models")
         assert resp.status_code == 200
         body = resp.json()
-        assert body["data"][0]["context_window"] == 16384
+        assert body["data"][0]["context_window"] == AGENT_NUM_CTX
 
 
 class TestMalformedToolCallsEndpoint:
@@ -799,7 +799,7 @@ class TestTrimContextIntegrity:
             })
         msgs.append({"role": "user", "content": "final question"})
 
-        budget = int(16384 * 0.75)
+        budget = int(AGENT_NUM_CTX * 0.75)
         before = _estimate_tokens(msgs)
         assert before > budget, "test setup: messages must exceed budget"
 
