@@ -11,7 +11,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: warmup
-          image: ollama/ollama:0.16
+          image: ollama/ollama:0.16.1
           command: ["/bin/sh", "-c"]
           args:
             - |
