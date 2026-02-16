@@ -776,9 +776,15 @@ class TestTrimContextIntegrity:
         assert len(new_intact) == 3, f"expected 3 new intact, got {len(new_intact)}"
 
     def test_realistic_payload_sizes(self):
-        """Forgetools-sized payloads trigger trimming within the 16K budget."""
+        """Forgetools-sized payloads trigger trimming within the configured budget."""
+        budget = int(AGENT_NUM_CTX * 0.75)
+        # Each round contributes ~(size/4) tokens from tool content alone.
+        # Build enough rounds so total comfortably exceeds the trim budget.
+        target_tokens = budget * 2
+        per_round_chars = 6000
+        rounds = (target_tokens * 4) // per_round_chars + 1
         msgs = [{"role": "system", "content": "You are a coding assistant."}]
-        for i in range(20):
+        for i in range(rounds):
             msgs.append({"role": "user", "content": f"Show me file {i}"})
             call_id = f"call_real_{i}"
             msgs.append({
@@ -789,7 +795,6 @@ class TestTrimContextIntegrity:
                     "function": {"name": "read_file", "arguments": json.dumps({"path": f"/src/mod{i}.py"})},
                 }],
             })
-            # Alternate between file reads (4000 chars) and dir listings (2000 chars)
             size = 4000 if i % 2 == 0 else 2000
             msgs.append({
                 "role": "tool",
@@ -799,7 +804,6 @@ class TestTrimContextIntegrity:
             })
         msgs.append({"role": "user", "content": "final question"})
 
-        budget = int(AGENT_NUM_CTX * 0.75)
         before = _estimate_tokens(msgs)
         assert before > budget, "test setup: messages must exceed budget"
 
