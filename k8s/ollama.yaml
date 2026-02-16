@@ -23,9 +23,9 @@ data:
   OLLAMA_NUM_PARALLEL: "1"
   OLLAMA_MAX_LOADED_MODELS: "1"
   # Q4_0 KV cache at ~0.05 MiB per token. 32k context uses ~1.6 GB,
-  # well within the ~5.7 GB free after qwen2.5-coder:14b model weights load.
+  # well within the ~4 GB free after qwen3:14b model weights load.
   OLLAMA_KV_CACHE_TYPE: "q4_0"
-  AGENT_MODEL: "qwen2.5-coder:14b"
+  AGENT_MODEL: "qwen3:14b"
   EMBEDDING_MODEL: "nomic-embed-text"
   # LLM response tuning. Applied by creating a model alias at startup.
   AGENT_TEMPERATURE: "0.3"

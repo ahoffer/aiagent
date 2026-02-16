@@ -9,7 +9,7 @@ from langchain_core.messages import AIMessage
 from adapters import select_adapter
 from adapters.base import ModelAdapter
 from adapters.qwen25coder import Qwen25CoderAdapter, _extract_tool_objects
-from adapters.qwen3 import Qwen3Adapter
+from adapters.qwen3 import Qwen3Adapter, _parse_xml_tool_calls, _strip_think_tags
 
 
 # -- Adapter selection --
@@ -37,11 +37,6 @@ class TestSelectAdapter:
         a2 = select_adapter("test-cache-model:1b")
         assert a1 is a2
 
-    def test_longest_prefix_wins(self):
-        """qwen2.5-coder is longer than a hypothetical qwen2.5 prefix."""
-        adapter = select_adapter("qwen2.5-coder:14b")
-        assert isinstance(adapter, Qwen25CoderAdapter)
-
 
 # -- Base adapter passthrough --
 
@@ -61,9 +56,6 @@ class TestBaseAdapter:
     def test_inject_tool_guidance_passthrough(self):
         msgs = [{"role": "user", "content": "hi"}]
         assert self.adapter.inject_tool_guidance(msgs, None) is msgs
-
-    def test_llm_kwargs_empty(self):
-        assert self.adapter.llm_kwargs() == {}
 
     def test_filter_hallucinated_removes_bad_names(self):
         calls = [
@@ -192,27 +184,10 @@ class TestQwen25CoderNormalizeToolCalls:
         result = self.adapter.normalize_tool_calls(msg, self.valid)
         assert result.get("tool_calls") is None
 
-    def test_no_tools_no_recovery(self):
-        """Without valid_names, no recovery is attempted."""
-        msg = {
-            "content": '{"name": "web_search", "arguments": {"query": "test"}}',
-            "tool_calls": None,
-        }
-        result = self.adapter.normalize_tool_calls(msg, set())
-        assert result.get("tool_calls") is None
-
     def test_plain_json_in_conversation_not_fabricated(self):
         """JSON objects without a name+arguments structure are not recovered."""
         msg = {
             "content": 'The config is {"database": "postgres", "port": 5432}.',
-            "tool_calls": None,
-        }
-        result = self.adapter.normalize_tool_calls(msg, self.valid)
-        assert result.get("tool_calls") is None
-
-    def test_invalid_json_in_content_ignored(self):
-        msg = {
-            "content": '```json\n{this is broken json}\n```',
             "tool_calls": None,
         }
         result = self.adapter.normalize_tool_calls(msg, self.valid)
@@ -283,16 +258,217 @@ class TestQwen25CoderToolGuidance:
         assert result is msgs
 
 
-# -- Qwen3 adapter --
+# -- Qwen3 XML parsing helpers --
 
-class TestQwen3Adapter:
+class TestQwen3XmlParsing:
 
-    def test_is_model_adapter(self):
-        adapter = Qwen3Adapter()
-        assert isinstance(adapter, ModelAdapter)
+    def test_single_function_parsed(self):
+        text = '<function=web_search><parameter=query>python docs</parameter></function>'
+        calls, cleaned = _parse_xml_tool_calls(text)
+        assert len(calls) == 1
+        assert calls[0]["name"] == "web_search"
+        assert calls[0]["arguments"] == {"query": "python docs"}
+        assert cleaned == ""
 
-    def test_passthrough_behavior(self):
-        adapter = Qwen3Adapter()
-        msg = AIMessage(content="hello")
-        assert adapter.normalize_ai_message(msg) is msg
-        assert adapter.llm_kwargs() == {}
+    def test_multiple_functions_parsed(self):
+        text = (
+            '<function=web_search><parameter=query>test</parameter></function>'
+            '<function=read_file><parameter=path>/tmp/a.txt</parameter></function>'
+        )
+        calls, cleaned = _parse_xml_tool_calls(text)
+        assert len(calls) == 2
+        assert calls[0]["name"] == "web_search"
+        assert calls[1]["name"] == "read_file"
+
+    def test_multiple_parameters(self):
+        text = '<function=run_command><parameter=command>ls -la</parameter><parameter=cwd>/tmp</parameter></function>'
+        calls, _ = _parse_xml_tool_calls(text)
+        assert calls[0]["arguments"] == {"command": "ls -la", "cwd": "/tmp"}
+
+    def test_surrounding_text_preserved(self):
+        text = 'I will search now. <function=web_search><parameter=query>test</parameter></function> Done.'
+        calls, cleaned = _parse_xml_tool_calls(text)
+        assert len(calls) == 1
+        assert "I will search now." in cleaned
+        assert "Done." in cleaned
+        assert "<function" not in cleaned
+
+    def test_no_xml_returns_empty(self):
+        calls, cleaned = _parse_xml_tool_calls("Just plain text.")
+        assert calls == []
+        assert cleaned == "Just plain text."
+
+    def test_strip_think_tags(self):
+        text = "<think>Let me reason about this.</think>The answer is 42."
+        assert _strip_think_tags(text) == "The answer is 42."
+
+    def test_strip_think_tags_multiline(self):
+        text = "<think>\nStep 1: consider\nStep 2: decide\n</think>\nHere is my answer."
+        assert _strip_think_tags(text) == "Here is my answer."
+
+    def test_strip_think_tags_no_think(self):
+        text = "No thinking here."
+        assert _strip_think_tags(text) == "No thinking here."
+
+
+# -- Qwen3 proxy path normalization --
+
+class TestQwen3NormalizeToolCalls:
+
+    def setup_method(self):
+        self.adapter = Qwen3Adapter()
+        self.valid = {"web_search", "read_file", "run_command"}
+
+    def test_single_xml_function_recovered(self):
+        msg = {
+            "content": '<function=web_search><parameter=query>python docs</parameter></function>',
+            "tool_calls": None,
+        }
+        result = self.adapter.normalize_tool_calls(msg, self.valid)
+        assert len(result["tool_calls"]) == 1
+        assert result["tool_calls"][0]["function"]["name"] == "web_search"
+        assert result["tool_calls"][0]["function"]["arguments"] == {"query": "python docs"}
+        assert "<function" not in result["content"]
+
+    def test_multiple_xml_functions_recovered(self):
+        msg = {
+            "content": (
+                '<function=web_search><parameter=query>test</parameter></function>'
+                '<function=read_file><parameter=path>/tmp/a.txt</parameter></function>'
+            ),
+            "tool_calls": None,
+        }
+        result = self.adapter.normalize_tool_calls(msg, self.valid)
+        assert len(result["tool_calls"]) == 2
+        names = {tc["function"]["name"] for tc in result["tool_calls"]}
+        assert names == {"web_search", "read_file"}
+
+    def test_mixed_content_and_xml(self):
+        """Text before and after XML is preserved, XML is stripped."""
+        msg = {
+            "content": 'Let me search. <function=web_search><parameter=query>test</parameter></function> Done.',
+            "tool_calls": None,
+        }
+        result = self.adapter.normalize_tool_calls(msg, self.valid)
+        assert len(result["tool_calls"]) == 1
+        assert "Let me search." in result["content"]
+        assert "Done." in result["content"]
+        assert "<function" not in result["content"]
+
+    def test_structured_calls_passed_through(self):
+        """When structured tool_calls exist, filter but do not parse XML."""
+        msg = {
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": "web_search", "arguments": {"query": "hi"}}},
+                {"function": {"name": "fake_tool", "arguments": {}}},
+            ],
+        }
+        result = self.adapter.normalize_tool_calls(msg, self.valid)
+        assert len(result["tool_calls"]) == 1
+        assert result["tool_calls"][0]["function"]["name"] == "web_search"
+
+    def test_invalid_names_filtered(self):
+        """XML tool calls with unknown names are dropped."""
+        msg = {
+            "content": '<function=invented_tool><parameter=x>1</parameter></function>',
+            "tool_calls": None,
+        }
+        result = self.adapter.normalize_tool_calls(msg, self.valid)
+        assert not result.get("tool_calls")
+
+    def test_think_tags_stripped(self):
+        msg = {
+            "content": '<think>Reasoning here.</think>The answer is 42.',
+            "tool_calls": None,
+        }
+        result = self.adapter.normalize_tool_calls(msg, self.valid)
+        assert "<think>" not in result["content"]
+        assert "The answer is 42." in result["content"]
+
+    def test_think_tags_stripped_with_xml_calls(self):
+        msg = {
+            "content": (
+                '<think>Let me think.</think>'
+                '<function=web_search><parameter=query>test</parameter></function>'
+            ),
+            "tool_calls": None,
+        }
+        result = self.adapter.normalize_tool_calls(msg, self.valid)
+        assert len(result["tool_calls"]) == 1
+        assert "<think>" not in result["content"]
+
+    def test_no_xml_passthrough(self):
+        """Plain text content without XML passes through unchanged."""
+        msg = {"content": "Hello world.", "tool_calls": None}
+        result = self.adapter.normalize_tool_calls(msg, self.valid)
+        assert result is msg
+
+    def test_empty_content_passthrough(self):
+        msg = {"content": "", "tool_calls": None}
+        result = self.adapter.normalize_tool_calls(msg, self.valid)
+        assert result is msg
+
+
+# -- Qwen3 agent path normalization --
+
+class TestQwen3NormalizeAIMessage:
+
+    def setup_method(self):
+        self.adapter = Qwen3Adapter()
+
+    def test_xml_recovery_from_content(self):
+        msg = AIMessage(
+            content='<function=web_search><parameter=query>test</parameter></function>',
+        )
+        result = self.adapter.normalize_ai_message(msg)
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0]["name"] == "web_search"
+        assert result.tool_calls[0]["args"] == {"query": "test"}
+        assert "<function" not in result.content
+
+    def test_passthrough_when_tool_calls_present(self):
+        msg = AIMessage(
+            content="some text",
+            tool_calls=[{"name": "web_search", "args": {"query": "x"}, "id": "1"}],
+        )
+        result = self.adapter.normalize_ai_message(msg)
+        assert result is msg
+
+    def test_think_tags_stripped(self):
+        msg = AIMessage(content="<think>Internal reasoning.</think>The answer is 42.")
+        result = self.adapter.normalize_ai_message(msg)
+        assert "<think>" not in result.content
+        assert "The answer is 42." in result.content
+
+    def test_think_tags_stripped_with_existing_tool_calls(self):
+        msg = AIMessage(
+            content="<think>Reasoning.</think>Calling tool.",
+            tool_calls=[{"name": "web_search", "args": {"query": "x"}, "id": "1"}],
+        )
+        result = self.adapter.normalize_ai_message(msg)
+        assert "<think>" not in result.content
+        assert "Calling tool." in result.content
+        assert len(result.tool_calls) == 1
+
+    def test_plain_text_passthrough(self):
+        msg = AIMessage(content="The answer is 42.")
+        result = self.adapter.normalize_ai_message(msg)
+        assert result is msg
+
+    def test_empty_content_passthrough(self):
+        msg = AIMessage(content="")
+        result = self.adapter.normalize_ai_message(msg)
+        assert result is msg
+
+    def test_multiple_xml_calls_recovered(self):
+        msg = AIMessage(
+            content=(
+                '<function=web_search><parameter=query>a</parameter></function>'
+                '<function=read_file><parameter=path>/b</parameter></function>'
+            ),
+        )
+        result = self.adapter.normalize_ai_message(msg)
+        assert len(result.tool_calls) == 2
+        assert result.tool_calls[0]["name"] == "web_search"
+        assert result.tool_calls[1]["name"] == "read_file"

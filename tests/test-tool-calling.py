@@ -565,7 +565,43 @@ for n in TOOL_COUNT_STRESS_LEVELS:
     })
 
 
-ALL_TESTS = SINGLE_TOOL_TESTS + NO_TOOL_TESTS + MULTI_TOOL_TESTS + MULTI_TURN_TESTS + TOOL_COUNT_STRESS_TESTS
+def validateAdapterRecovery(response):
+    """Verify that the adapter translated XML tool calls into structured form.
+
+    Passes when the response has at least one structured tool_call and no raw
+    XML function tags remain in content. Catches adapter regressions that the
+    stress tests would surface only as a vague 'no tool call' failure.
+    """
+    calls = extractToolCalls(response)
+    content = extractContent(response)
+    if "<function=" in content:
+        snippet = makeSnippet(content, 80)
+        return False, f"raw XML leaked into content: {snippet}"
+    if len(calls) == 0:
+        snippet = makeSnippet(content, 80)
+        return False, f"no structured tool_calls: {snippet}"
+    actualName = calls[0].get("function", {}).get("name", "")
+    if actualName != "list_files":
+        return False, f"expected list_files, got {actualName}"
+    return True, f"adapter recovered {len(calls)} structured call(s)"
+
+
+# 11 tools to push past qwen3's 6-tool XML threshold
+_ADAPTER_RECOVERY_TOOLS = [LIST_FILES_TOOL] + [_makeDummyTool(i) for i in range(1, 11)]
+
+ADAPTER_RECOVERY_TESTS = [
+    {
+        "name": "adapter recovery 11 tools",
+        "category": "adapter_recovery",
+        "prompt": "List all files in /tmp",
+        "tools": _ADAPTER_RECOVERY_TOOLS,
+        "validate": validateAdapterRecovery,
+    },
+]
+
+
+ALL_TESTS = (SINGLE_TOOL_TESTS + NO_TOOL_TESTS + MULTI_TOOL_TESTS
+             + MULTI_TURN_TESTS + TOOL_COUNT_STRESS_TESTS + ADAPTER_RECOVERY_TESTS)
 
 
 def runTest(baseUrl, modelName, testCase):
@@ -742,7 +778,7 @@ def main():
     )
     parser.add_argument(
         "--category",
-        choices=["single_tool", "no_tool", "multi_tool", "multi_turn", "tool_count_stress"],
+        choices=["single_tool", "no_tool", "multi_tool", "multi_turn", "tool_count_stress", "adapter_recovery"],
         help="Run only tests in this category",
     )
     parser.add_argument(
